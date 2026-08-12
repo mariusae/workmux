@@ -381,7 +381,9 @@ impl App {
             return;
         }
 
-        let is_dirty = git::has_uncommitted_changes(&worktree.path).unwrap_or(false);
+        let is_dirty = crate::vcs::detect_in(&worktree.path)
+            .and_then(|kind| crate::vcs::has_uncommitted_changes(kind, &worktree.path))
+            .unwrap_or(false);
 
         self.pending_remove = Some(RemovePlan {
             handle: worktree.handle.clone(),
@@ -466,11 +468,17 @@ impl App {
         }
 
         let prefix = self.config.window_prefix();
+        let context =
+            workflow::WorkflowContext::new(self.config.clone(), self.mux.clone(), None).ok();
         if worktree.mode == crate::config::MuxMode::Window {
             let window_token = self
                 .mux
                 .supports_window_ownership()
-                .then(|| crate::git::get_worktree_window_token(&worktree.handle))
+                .then(|| {
+                    context
+                        .as_ref()
+                        .and_then(|context| context.window_token(&worktree.handle))
+                })
                 .flatten();
             let target = if let Some(token) = window_token {
                 self.mux
@@ -483,18 +491,24 @@ impl App {
                             .map(|owned| owned.target.clone())
                     })
             } else {
-                let target_name = crate::git::get_worktree_target_window(&worktree.handle)
+                let target_name = context
+                    .as_ref()
+                    .and_then(|context| context.target_window(&worktree.handle))
                     .unwrap_or_else(|| worktree.handle.clone());
                 Some(crate::multiplexer::WindowTarget::new(
                     crate::multiplexer::util::prefixed(prefix, &target_name),
-                    crate::git::get_worktree_window_session(&worktree.handle),
+                    context
+                        .as_ref()
+                        .and_then(|context| context.window_session(&worktree.handle)),
                 ))
             };
             if let Some(target) = target {
                 let _ = self.mux.kill_window_target(&target);
             }
         } else {
-            let target_name = crate::git::get_worktree_target_session(&worktree.handle)
+            let target_name = context
+                .as_ref()
+                .and_then(|context| context.target_session(&worktree.handle))
                 .unwrap_or_else(|| worktree.handle.clone());
             let full_name = crate::multiplexer::util::prefixed(prefix, &target_name);
             let _ = crate::multiplexer::handle::MuxHandle::kill_full(

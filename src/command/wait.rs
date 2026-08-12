@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 
-use crate::git;
 use crate::multiplexer::{AgentStatus, create_backend, detect_backend};
 use crate::state::StateStore;
 use crate::util;
 use crate::workflow;
+use crate::{git, vcs};
 
 /// Resolve a worktree name to its path, trying local git first then global agents.
 ///
@@ -19,10 +19,12 @@ fn resolve_worktree_path(
     name: &str,
     mux: &dyn crate::multiplexer::Multiplexer,
 ) -> Result<std::path::PathBuf> {
-    // Try local git resolution first (supports waiting for unstarted agents)
-    if git::is_git_repo().unwrap_or(false) {
-        match git::find_worktree(name) {
-            Ok((path, _branch)) => return Ok(path),
+    // Try local repository resolution first (supports waiting for unstarted agents)
+    if let Ok(cwd) = std::env::current_dir()
+        && let Ok(kind) = vcs::detect_in(&cwd)
+    {
+        match vcs::find_worktree_in(kind, name, &cwd) {
+            Ok(worktree) => return Ok(worktree.path),
             Err(e) if e.downcast_ref::<git::WorktreeNotFound>().is_some() => {}
             Err(e) => return Err(e),
         }

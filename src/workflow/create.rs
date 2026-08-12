@@ -3,10 +3,10 @@ use std::path::Path;
 
 use crate::config::MuxMode;
 use crate::multiplexer::MuxHandle;
-use crate::{git, spinner};
+use crate::{git, spinner, vcs};
 use tracing::{debug, info, warn};
 
-/// Check if a path is registered as a git worktree.
+/// Check if a path is registered as a worktree.
 /// Uses canonicalize() to handle symlinks, case sensitivity, and relative paths.
 fn is_registered_worktree(path: &Path, context: &WorkflowContext) -> Result<bool> {
     // Canonicalize the input path for reliable comparison
@@ -15,8 +15,9 @@ fn is_registered_worktree(path: &Path, context: &WorkflowContext) -> Result<bool
         Err(_) => return Ok(false), // Can't canonicalize = not a valid worktree
     };
 
-    let worktrees = git::list_worktrees_in(Some(&context.execution_dir))?;
-    for (wt_path, _) in worktrees {
+    let worktrees = vcs::list_worktrees_in(context.vcs_kind, &context.execution_dir)?;
+    for worktree in worktrees {
+        let wt_path = worktree.path;
         // Canonicalize git's reported path as well
         if let Ok(abs_wt) = std::fs::canonicalize(&wt_path) {
             if abs_wt == abs_path {
@@ -107,7 +108,9 @@ pub fn create(context: &WorkflowContext, args: CreateArgs) -> Result<CreateResul
     );
     let full_target_name = target.full_name();
     let mut target_exists = target.exists()?;
-    let worktree_exists = git::worktree_exists_in(branch_name, Some(&context.execution_dir))?;
+    let worktree_exists =
+        vcs::find_worktree_in(context.vcs_kind, branch_name, &context.execution_dir).is_ok()
+            || vcs::find_worktree_in(context.vcs_kind, handle, &context.execution_dir).is_ok();
 
     // Detect cross-repo collision: mux target exists but local worktree does not.
     // This means the target belongs to a different repository. Auto-suffix with the
@@ -228,7 +231,8 @@ pub fn create(context: &WorkflowContext, args: CreateArgs) -> Result<CreateResul
     }
 
     // Auto-detect: create branch if it doesn't exist
-    let branch_exists = git::branch_exists_in(branch_name, Some(&context.execution_dir))?;
+    let branch_exists = context.vcs_kind == vcs::VcsKind::Git
+        && git::branch_exists_in(branch_name, Some(&context.execution_dir))?;
     if branch_exists && remote_branch.is_some() && pr_number.is_none() {
         return Err(anyhow!(
             "Branch '{}' already exists. Remove '--remote' or pick a different branch name.",
@@ -243,7 +247,14 @@ pub fn create(context: &WorkflowContext, args: CreateArgs) -> Result<CreateResul
     );
 
     // Determine the base for the new branch
-    let base_branch_for_creation = if let Some(remote_spec) = remote_branch {
+    let base_branch_for_creation = if context.vcs_kind == vcs::VcsKind::Sapling {
+        Some(
+            base_branch
+                .filter(|base| !base.trim().is_empty())
+                .unwrap_or(".")
+                .to_string(),
+        )
+    } else if let Some(remote_spec) = remote_branch {
         let spec = git::parse_remote_branch_spec(remote_spec)?;
         if !git::remote_exists_in(&spec.remote, Some(&context.execution_dir))? {
             return Err(anyhow!(
@@ -386,12 +397,20 @@ pub fn create(context: &WorkflowContext, args: CreateArgs) -> Result<CreateResul
     // Acquire an exclusive lock to serialize .git/config writes across parallel
     // workmux processes. Without this, concurrent `workmux add` commands race on
     // git's config.lock file and fail with "could not lock config file".
-    let _config_lock = git::GitConfigLock::acquire(&context.git_common_dir)
-        .context("Failed to acquire git config lock")?;
+    let config_lock = if context.vcs_kind == vcs::VcsKind::Git {
+        Some(
+            git::GitConfigLock::acquire(&context.git_common_dir)
+                .context("Failed to acquire git config lock")?,
+        )
+    } else {
+        None
+    };
 
     // Store the base branch before checkout so observers that see the worktree
     // appear on disk also see complete branch metadata.
-    if let Some(ref base) = base_branch_for_creation {
+    if context.vcs_kind == vcs::VcsKind::Git
+        && let Some(ref base) = base_branch_for_creation
+    {
         git::set_branch_base_in(branch_name, base, Some(&context.execution_dir)).with_context(
             || {
                 format!(
@@ -407,15 +426,23 @@ pub fn create(context: &WorkflowContext, args: CreateArgs) -> Result<CreateResul
         );
     }
 
-    git::create_worktree_in(
-        &worktree_path,
-        branch_name,
-        create_new,
-        base_branch_for_creation.as_deref(),
-        track_upstream,
-        Some(&context.execution_dir),
+    vcs::create_worktree_in(
+        context.vcs_kind,
+        &vcs::CreateWorktree {
+            path: &worktree_path,
+            handle: &current_handle,
+            reference: branch_name,
+            create_reference: create_new,
+            base: base_branch_for_creation.as_deref(),
+            track_upstream,
+        },
+        &context.execution_dir,
     )
-    .context("Failed to create git worktree")?;
+    .with_context(|| format!("Failed to create {} worktree", context.vcs_kind.name()))?;
+
+    if let Some(ref base) = base_branch_for_creation {
+        context.set_worktree_meta(&current_handle, "base", base)?;
+    }
 
     // Store the tmux mode in git config for cleanup and reopen operations.
     // This allows remove/close/merge/open to know whether to kill a window or session.
@@ -423,65 +450,46 @@ pub fn create(context: &WorkflowContext, args: CreateArgs) -> Result<CreateResul
         MuxMode::Session => "session",
         MuxMode::Window => "window",
     };
-    git::set_worktree_meta_in(
-        &current_handle,
-        "mode",
-        mode_str,
-        Some(&context.execution_dir),
-    )
-    .with_context(|| {
-        format!(
-            "Failed to store tmux mode for worktree '{}'",
-            current_handle
-        )
-    })?;
-    if let Some(target_window_name) = &options.target_window_name {
-        git::set_worktree_meta_in(
-            &current_handle,
-            "target-window",
-            target_window_name,
-            Some(&context.execution_dir),
-        )
+    context
+        .set_worktree_meta(&current_handle, "mode", mode_str)
         .with_context(|| {
             format!(
-                "Failed to store target window for worktree '{}'",
+                "Failed to store tmux mode for worktree '{}'",
                 current_handle
             )
         })?;
+    if let Some(target_window_name) = &options.target_window_name {
+        context
+            .set_worktree_meta(&current_handle, "target-window", target_window_name)
+            .with_context(|| {
+                format!(
+                    "Failed to store target window for worktree '{}'",
+                    current_handle
+                )
+            })?;
     }
     if let Some(target_session_name) = &options.target_session_name {
-        git::set_worktree_meta_in(
-            &current_handle,
-            "target-session",
-            target_session_name,
-            Some(&context.execution_dir),
-        )
-        .with_context(|| {
-            format!(
-                "Failed to store target session for worktree '{}'",
-                current_handle
-            )
-        })?;
+        context
+            .set_worktree_meta(&current_handle, "target-session", target_session_name)
+            .with_context(|| {
+                format!(
+                    "Failed to store target session for worktree '{}'",
+                    current_handle
+                )
+            })?;
     }
     if let Some(window_session_name) = &options.window_session_name {
-        git::set_worktree_meta_in(
-            &current_handle,
-            "window-session",
-            window_session_name,
-            Some(&context.execution_dir),
-        )
-        .with_context(|| {
-            format!(
-                "Failed to store window session for worktree '{}'",
-                current_handle
-            )
-        })?;
+        context
+            .set_worktree_meta(&current_handle, "window-session", window_session_name)
+            .with_context(|| {
+                format!(
+                    "Failed to store window session for worktree '{}'",
+                    current_handle
+                )
+            })?;
     }
     if options.mode == MuxMode::Window && context.mux.supports_window_ownership() {
-        options.window_token = Some(git::ensure_worktree_window_token_in(
-            &current_handle,
-            Some(&context.execution_dir),
-        )?);
+        options.window_token = Some(context.ensure_window_token(&current_handle)?);
         options.primary_window = true;
     }
     debug!(
@@ -492,7 +500,7 @@ pub fn create(context: &WorkflowContext, args: CreateArgs) -> Result<CreateResul
 
     // Release the config lock before proceeding to non-git operations
     // (prompt files, tmux setup, hooks, etc.)
-    drop(_config_lock);
+    drop(config_lock);
 
     // Fork conversation into the new worktree if requested.
     // Must happen after git::create_worktree() (path is finalized) and before
@@ -995,7 +1003,7 @@ mod tests {
 
         assert!(result.worktree_path.exists());
         assert_eq!(
-            git::get_worktree_meta_in("feature", "mode", Some(&repo_b)).as_deref(),
+            ctx.get_worktree_meta("feature", "mode").as_deref(),
             Some("window")
         );
         assert!(!git::branch_exists_in("feature", Some(&repo_a)).unwrap());

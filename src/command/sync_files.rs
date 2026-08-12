@@ -1,16 +1,16 @@
 use anyhow::{Context, Result, bail};
 
 use crate::workflow::file_ops::{handle_file_operations, symlink_claude_local_md};
-use crate::{config, git};
+use crate::{config, vcs};
 
 pub fn run(all: bool) -> Result<()> {
-    let repo_root =
-        git::get_main_worktree_root().context("Could not find the main git worktree")?;
-
     // Discover config nesting from CWD (e.g., "backend/" for monorepo configs).
     // We only need the rel_dir, not the config content, since the worktree's
     // checked-out branch may have an outdated .workmux.yaml.
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let vcs_kind = vcs::detect_in(&cwd)?;
+    let repo_root =
+        vcs::main_worktree_root_in(vcs_kind, &cwd).context("Could not find the main worktree")?;
     let cwd_rel_dir = config::find_project_config(&cwd)?
         .map(|loc| loc.rel_dir)
         .unwrap_or_default();
@@ -38,12 +38,14 @@ pub fn run(all: bool) -> Result<()> {
 
     let targets = if all {
         // Sync all worktrees (excluding main)
-        let worktrees = git::list_worktrees().context("Failed to list worktrees")?;
+        let worktrees =
+            vcs::list_worktrees_in(vcs_kind, &cwd).context("Failed to list worktrees")?;
         let mut paths = Vec::new();
-        for (path, _branch) in worktrees {
-            if path == repo_root {
+        for worktree in worktrees {
+            if worktree.is_main {
                 continue;
             }
+            let path = worktree.path;
             // For monorepo, target the equivalent subdirectory in each worktree
             let target = if rel_dir.as_os_str().is_empty() {
                 path
@@ -58,8 +60,8 @@ pub fn run(all: bool) -> Result<()> {
         paths
     } else {
         // Resolve the worktree root (not CWD, which could be a subdirectory)
-        let worktree_root =
-            git::get_repo_root().context("Failed to determine current worktree root")?;
+        let worktree_root = vcs::repo_root_in(vcs_kind, &cwd)
+            .context("Failed to determine current worktree root")?;
 
         if worktree_root == repo_root {
             bail!(

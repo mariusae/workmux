@@ -6,7 +6,7 @@ use crate::config::MuxMode;
 use crate::multiplexer::util::prefixed;
 use crate::state::StateStore;
 use crate::util::canon_or_self;
-use crate::{git, naming};
+use crate::{git, naming, vcs};
 
 use super::context::WorkflowContext;
 use super::types::RenameResult;
@@ -23,23 +23,35 @@ pub fn rename(
     //    `find_worktree` handles both. Always derive the authoritative handle
     //    from the worktree's directory basename to keep metadata/tmux/state
     //    migrations consistent regardless of what the user typed.
-    let (old_path, branch_name) = git::find_worktree(user_target).with_context(|| {
-        format!(
-            "Worktree '{}' not found. Use 'workmux list' to see available worktrees.",
-            user_target
-        )
-    })?;
-
-    let old_handle = old_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| {
-            anyhow!(
-                "Could not derive handle from worktree path: {}",
-                old_path.display()
+    let worktree = vcs::find_worktree_in(context.vcs_kind, user_target, &context.execution_dir)
+        .with_context(|| {
+            format!(
+                "Worktree '{}' not found. Use 'workmux list' to see available worktrees.",
+                user_target
             )
-        })?
-        .to_string();
+        })?;
+    let worktree_handle = worktree.handle();
+    let branch_name = if context.vcs_kind == vcs::VcsKind::Sapling {
+        worktree_handle
+    } else {
+        worktree.reference
+    };
+    let old_path = worktree.path;
+
+    let old_handle = if context.vcs_kind == vcs::VcsKind::Sapling {
+        branch_name.clone()
+    } else {
+        old_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| {
+                anyhow!(
+                    "Could not derive handle from worktree path: {}",
+                    old_path.display()
+                )
+            })?
+            .to_string()
+    };
 
     // 2. Reject main worktree
     if old_path == context.main_worktree_root {
@@ -70,7 +82,11 @@ pub fn rename(
     let parent = old_path
         .parent()
         .ok_or_else(|| anyhow!("Cannot determine parent directory of worktree"))?;
-    let new_path = parent.join(&new_handle);
+    let new_path = if context.vcs_kind == vcs::VcsKind::Sapling {
+        old_path.clone()
+    } else {
+        parent.join(&new_handle)
+    };
 
     let new_branch = if rename_branch {
         // Keep it simple: the new branch name equals the new handle.
@@ -82,13 +98,13 @@ pub fn rename(
 
     // 6. Collision preflight
     if new_handle != old_handle {
-        if new_path.exists() {
+        if context.vcs_kind == vcs::VcsKind::Git && new_path.exists() {
             return Err(anyhow!(
                 "Target path already exists: {}",
                 new_path.display()
             ));
         }
-        if git::find_worktree(&new_handle).is_ok() {
+        if vcs::find_worktree_in(context.vcs_kind, &new_handle, &context.execution_dir).is_ok() {
             return Err(anyhow!(
                 "Another worktree with handle '{}' already exists",
                 new_handle
@@ -98,13 +114,16 @@ pub fn rename(
 
     if let Some(ref b) = new_branch
         && b != &branch_name
+        && context.vcs_kind == vcs::VcsKind::Git
         && git::branch_exists(b).unwrap_or(false)
     {
         return Err(anyhow!("Branch '{}' already exists", b));
     }
 
     // 7. tmux target collision check (only if handle is changing)
-    let mode = git::get_worktree_mode(&old_handle);
+    let mode = context
+        .worktree_mode(&old_handle)
+        .unwrap_or(MuxMode::Window);
     let old_full = prefixed(&context.prefix, &old_handle);
     let new_full = prefixed(&context.prefix, &new_handle);
     let mux_running = context.mux.is_running().unwrap_or(false);
@@ -147,8 +166,14 @@ pub fn rename(
 
     // 10. Execute: git worktree move
     if new_handle != old_handle {
-        git::move_worktree(&old_path, &new_path)
-            .context("Failed to move worktree (is the directory in use?)")?;
+        vcs::rename_worktree_in(
+            context.vcs_kind,
+            &old_path,
+            &new_path,
+            &new_handle,
+            &context.execution_dir,
+        )
+        .context("Failed to move worktree (is the directory in use?)")?;
         info!(from = %old_path.display(), to = %new_path.display(), "rename:worktree moved");
     }
 
@@ -161,10 +186,17 @@ pub fn rename(
     }
 
     // 12. Migrate workmux.worktree.<handle>.* metadata
-    if new_handle != old_handle
-        && let Err(e) = git::migrate_worktree_meta(&old_handle, &new_handle)
-    {
-        warn!(error = %e, "rename:failed to migrate worktree metadata");
+    if new_handle != old_handle {
+        if let Ok(store) = context.metadata_store()
+            && let Err(e) = store.migrate(&old_handle, &new_handle)
+        {
+            warn!(error = %e, "rename:failed to migrate worktree metadata");
+        }
+        if context.vcs_kind == vcs::VcsKind::Git
+            && let Err(e) = git::migrate_worktree_meta(&old_handle, &new_handle)
+        {
+            warn!(error = %e, "rename:failed to migrate legacy Git metadata");
+        }
     }
 
     // 13. Rename tmux window(s)/session

@@ -1,11 +1,12 @@
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;
 
-use crate::git;
+use crate::config::MuxMode;
 use crate::sandbox;
+use crate::{git, vcs};
 use tracing::{debug, info};
 
-use super::cleanup::{self, get_worktree_mode};
+use super::cleanup;
 use super::context::WorkflowContext;
 use super::types::RemoveResult;
 
@@ -64,37 +65,42 @@ fn remove_with_hook_output(
 
     // Get worktree path and branch - this also validates that the worktree exists
     // Smart resolution: try handle first, then branch name
-    let (worktree_path, branch_name) = match git::find_worktree(handle) {
-        Ok(worktree) => worktree,
-        Err(e) => {
-            if let Some(path) = fallback_worktree_path(handle, context)? {
-                (path, String::new())
-            } else {
-                return Err(anyhow!(
-                    "Worktree '{}' not found. Use 'workmux list' to see available worktrees.",
-                    handle
-                )
-                .context(e));
+    let (worktree_path, branch_name, resolved_handle) =
+        match vcs::find_worktree_in(context.vcs_kind, handle, &context.execution_dir) {
+            Ok(worktree) => {
+                let resolved_handle = worktree.handle();
+                let reference = if context.vcs_kind == vcs::VcsKind::Sapling {
+                    resolved_handle.clone()
+                } else {
+                    worktree.reference
+                };
+                (worktree.path, reference, resolved_handle)
             }
-        }
-    };
+            Err(e) => {
+                if context.vcs_kind == vcs::VcsKind::Git
+                    && let Some(path) = fallback_worktree_path(handle, context)?
+                {
+                    (path, String::new(), handle.to_string())
+                } else {
+                    return Err(anyhow!(
+                        "Worktree '{}' not found. Use 'workmux list' to see available worktrees.",
+                        handle
+                    )
+                    .context(e));
+                }
+            }
+        };
 
     // Extract actual handle from worktree path (directory name)
     // User may have provided branch name (with slashes) but window names use handle (with dashes)
-    let actual_handle = worktree_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| {
-            anyhow!(
-                "Could not derive handle from worktree path: {}",
-                worktree_path.display()
-            )
-        })?;
+    let actual_handle = resolved_handle.as_str();
 
     debug!(handle = actual_handle, branch = branch_name, path = %worktree_path.display(), "remove:worktree resolved");
 
     // Capture mode BEFORE cleanup (cleanup removes the metadata)
-    let mode = get_worktree_mode(actual_handle);
+    let mode = context
+        .worktree_mode(actual_handle)
+        .unwrap_or(MuxMode::Window);
 
     // Safety Check: Prevent deleting the main worktree itself, regardless of branch.
     if context.is_main_worktree(&worktree_path) {
@@ -116,7 +122,7 @@ fn remove_with_hook_output(
     }
 
     // Safety Check: Prevent deleting the main branch by name (secondary check)
-    if branch_name == context.main_branch {
+    if context.vcs_kind == vcs::VcsKind::Git && branch_name == context.main_branch {
         return Err(anyhow!(
             "Cannot delete the main branch ('{}')",
             context.main_branch
@@ -124,8 +130,8 @@ fn remove_with_hook_output(
     }
 
     if worktree_path.exists()
-        && !git::has_missing_admin_dir(&worktree_path)
-        && git::has_uncommitted_changes(&worktree_path)?
+        && (context.vcs_kind != vcs::VcsKind::Git || !git::has_missing_admin_dir(&worktree_path))
+        && vcs::has_uncommitted_changes(context.vcs_kind, &worktree_path)?
         && !force
     {
         return Err(anyhow!(

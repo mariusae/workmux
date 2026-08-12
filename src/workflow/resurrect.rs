@@ -6,10 +6,10 @@ use tracing::info;
 
 use crate::agent_identity::AgentKind;
 use crate::config::{self, MuxMode};
-use crate::git;
 use crate::multiplexer::{self, Multiplexer};
 use crate::state::{AgentState, PaneKey, StateStore};
 use crate::util::canon_or_self;
+use crate::{git, vcs};
 
 #[derive(Debug)]
 pub enum ResurrectAction {
@@ -99,20 +99,18 @@ pub fn plan(store: &StateStore, mux: &dyn Multiplexer) -> Result<ResurrectPlan> 
     );
 
     // Get worktrees for current repo
-    let worktrees = git::list_worktrees()?;
-    let main_root = git::get_main_worktree_root()?;
+    let cwd = std::env::current_dir()?;
+    let vcs_kind = vcs::detect_in(&cwd)?;
+    let worktrees = vcs::list_worktrees_in(vcs_kind, &cwd)?;
+    let main_root = vcs::main_worktree_root_in(vcs_kind, &cwd)?;
     let canon_main = canon_or_self(&main_root);
 
     // Build canonical worktree map: (canon_path, handle)
     let wt_map: Vec<(PathBuf, String)> = worktrees
         .iter()
-        .map(|(path, _branch)| {
-            let handle = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            (canon_or_self(path), handle)
+        .map(|worktree| {
+            let handle = worktree.handle();
+            (canon_or_self(&worktree.path), handle)
         })
         .collect();
 
@@ -125,6 +123,7 @@ pub fn plan(store: &StateStore, mux: &dyn Multiplexer) -> Result<ResurrectPlan> 
     // Use config default mode as fallback for worktrees with no stored mode,
     // matching the resolution logic in workflow::open
     let default_mode = config.mode();
+    let metadata = vcs::WorktreeMetadataStore::new(vcs_kind, &main_root).ok();
 
     // Group agent states by matched worktree handle
     let mut by_handle: HashMap<String, ResurrectHandleState> = HashMap::new();
@@ -149,7 +148,20 @@ pub fn plan(store: &StateStore, mux: &dyn Multiplexer) -> Result<ResurrectPlan> 
                     status = ?agent.status,
                     "resurrect:plan matched agent to worktree"
                 );
-                let mode = git::get_worktree_mode_opt(handle).unwrap_or(default_mode);
+                let stored_mode = metadata
+                    .as_ref()
+                    .and_then(|store| store.get(handle, "mode"))
+                    .and_then(|mode| match mode.as_str() {
+                        "session" => Some(MuxMode::Session),
+                        "window" => Some(MuxMode::Window),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        (vcs_kind == vcs::VcsKind::Git)
+                            .then(|| git::get_worktree_mode_opt(handle))
+                            .flatten()
+                    });
+                let mode = stored_mode.unwrap_or(default_mode);
                 let entry = by_handle
                     .entry(handle.clone())
                     .or_insert_with(|| (mode, None, Vec::new()));

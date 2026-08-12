@@ -7,11 +7,8 @@ use std::{thread, time::Duration};
 use crate::config::MuxMode;
 use crate::multiplexer::{Multiplexer, WindowTarget, util::prefixed};
 use crate::shell::shell_quote;
-use crate::{cmd, git};
+use crate::{cmd, git, vcs};
 use tracing::{debug, info, warn};
-
-// Re-export for use by other modules in the workflow
-pub use git::get_worktree_mode;
 
 use super::context::WorkflowContext;
 use super::types::{CleanupResult, DeferredCleanup};
@@ -256,22 +253,26 @@ pub fn cleanup(
     }
 
     // Determine if this worktree was created as a session or window
-    let mode = get_worktree_mode(handle);
+    let mode = context.worktree_mode(handle).unwrap_or(MuxMode::Window);
     let target_name = if mode == MuxMode::Session {
-        git::get_worktree_target_session(handle).unwrap_or_else(|| handle.to_string())
+        context
+            .target_session(handle)
+            .unwrap_or_else(|| handle.to_string())
     } else {
-        git::get_worktree_target_window(handle).unwrap_or_else(|| handle.to_string())
+        context
+            .target_window(handle)
+            .unwrap_or_else(|| handle.to_string())
     };
     let is_session_mode = mode == MuxMode::Session;
     let parent_session = if is_session_mode {
         None
     } else {
-        git::get_worktree_window_session(handle)
+        context.window_session(handle)
     };
     let window_token = if is_session_mode || !context.mux.supports_window_ownership() {
         None
     } else {
-        git::get_worktree_window_token(handle)
+        context.window_token(handle)
     };
     let kind = crate::multiplexer::handle::mode_label(mode);
 
@@ -384,6 +385,20 @@ pub fn cleanup(
                 path = %worktree_path.display(),
                 "cleanup:skipping pre-remove hooks, worktree directory does not exist"
             );
+        }
+
+        // EdenFS owns Sapling worktree mount points. Never rename or recursively
+        // delete them; ask Sapling to unmount and unregister the worktree.
+        if context.vcs_kind == vcs::VcsKind::Sapling {
+            cleanup_prompt_files(branch_name);
+            vcs::remove_worktree_in(
+                context.vcs_kind,
+                worktree_path,
+                force,
+                &context.main_worktree_root,
+            )?;
+            result.worktree_removed = true;
+            return Ok(());
         }
 
         // Track the trash path for best-effort deletion at the end
@@ -585,6 +600,7 @@ pub fn cleanup(
                 resolve_worktree_admin_dir(worktree_path, &context.git_common_dir);
 
             result.deferred_cleanup = Some(DeferredCleanup {
+                vcs_kind: context.vcs_kind,
                 worktree_path: worktree_path.to_path_buf(),
                 trash_path,
                 branch_name: branch_name.to_string(),
@@ -676,10 +692,18 @@ pub fn cleanup(
     // Clean up worktree metadata from git config.
     // Only remove immediately when not deferring -- deferred cleanup includes this
     // in the shell script so metadata survives if the deferred script fails.
-    if result.deferred_cleanup.is_none()
-        && let Err(e) = git::remove_worktree_meta(handle)
+    if let Ok(store) = context.metadata_store()
+        && let Err(e) = store.remove(handle)
     {
         warn!(handle = handle, error = %e, "cleanup:failed to remove worktree metadata");
+    }
+    if result.deferred_cleanup.is_none() {
+        // Retain legacy Git-config cleanup while old metadata is still read.
+        if context.vcs_kind == vcs::VcsKind::Git
+            && let Err(e) = git::remove_worktree_meta(handle)
+        {
+            warn!(handle = handle, error = %e, "cleanup:failed to remove legacy worktree metadata");
+        }
     }
 
     Ok(result)
@@ -698,6 +722,10 @@ pub fn cleanup(
 /// The returned string starts with "; " so it can be appended to other commands.
 fn build_deferred_cleanup_script(dc: &DeferredCleanup) -> String {
     let wt = shell_quote(&dc.worktree_path.to_string_lossy());
+    if dc.vcs_kind == vcs::VcsKind::Sapling {
+        let root = shell_quote(&dc.git_common_dir.to_string_lossy());
+        return format!("; sl -R {} worktree remove {} -y >/dev/null 2>&1", root, wt);
+    }
     let trash = shell_quote(&dc.trash_path.to_string_lossy());
     let git_dir = shell_quote(&dc.git_common_dir.to_string_lossy());
 
@@ -976,6 +1004,7 @@ mod tests {
         force: bool,
     ) -> DeferredCleanup {
         DeferredCleanup {
+            vcs_kind: vcs::VcsKind::Git,
             worktree_path: PathBuf::from(worktree),
             trash_path: PathBuf::from(trash),
             branch_name: branch.to_string(),

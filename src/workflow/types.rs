@@ -75,6 +75,7 @@ pub struct RenameResult {
 /// Deferred cleanup operations to run after window close.
 /// Used when running inside the target window to avoid invalidating the agent's CWD.
 pub struct DeferredCleanup {
+    pub vcs_kind: crate::vcs::VcsKind,
     pub worktree_path: PathBuf,
     pub trash_path: PathBuf,
     pub branch_name: String,

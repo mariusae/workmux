@@ -7,7 +7,7 @@ use crate::multiplexer::{
     CreateSessionParams, CreateWindowInSessionParams, CreateWindowParams, Multiplexer,
     PaneSetupOptions,
 };
-use crate::{cmd, config, git, prompt::Prompt};
+use crate::{cmd, config, prompt::Prompt};
 use tracing::{debug, info};
 
 use super::file_ops::{handle_file_operations, symlink_claude_local_md};
@@ -54,7 +54,11 @@ pub fn setup_environment(
     let prefix = config.window_prefix();
     let repo_root = match &options.config_root {
         Some(path) => path.clone(),
-        None => git::get_main_worktree_root()?,
+        None => {
+            let cwd = std::env::current_dir()?;
+            let kind = crate::vcs::detect_in(&cwd)?;
+            crate::vcs::main_worktree_root_in(kind, &cwd)?
+        }
     };
 
     // Determine effective working directory (config-relative or worktree root)

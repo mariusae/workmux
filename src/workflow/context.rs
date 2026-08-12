@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::multiplexer::Multiplexer;
-use crate::{config, git};
+use crate::{config, git, vcs};
 use tracing::debug;
 
 const AUTO_BASE_BRANCH: &str = "auto";
@@ -13,6 +13,7 @@ const AUTO_BASE_BRANCH: &str = "auto";
 /// This struct centralizes pre-flight checks and holds essential data
 /// needed by workflow modules, reducing code duplication.
 pub struct WorkflowContext {
+    pub vcs_kind: vcs::VcsKind,
     pub execution_dir: PathBuf,
     pub main_worktree_root: PathBuf,
     pub git_common_dir: PathBuf,
@@ -36,6 +37,20 @@ fn resolve_main_branch(config: &config::Config, repo_path: &Path) -> Result<Stri
     }
 }
 
+fn resolve_main_reference(
+    kind: vcs::VcsKind,
+    config: &config::Config,
+    repo_path: &Path,
+) -> Result<String> {
+    match kind {
+        vcs::VcsKind::Git => resolve_main_branch(config, repo_path),
+        vcs::VcsKind::Sapling => Ok(config
+            .main_branch
+            .clone()
+            .unwrap_or_else(|| ".".to_string())),
+    }
+}
+
 pub fn resolve_configured_base_branch(
     config: &config::Config,
     repo_path: &Path,
@@ -49,7 +64,8 @@ pub fn resolve_configured_base_branch(
     };
 
     if base == AUTO_BASE_BRANCH {
-        resolve_main_branch(config, repo_path).map(Some)
+        let kind = vcs::detect_in(repo_path)?;
+        resolve_main_reference(kind, config, repo_path).map(Some)
     } else {
         Ok(Some(base.to_string()))
     }
@@ -91,17 +107,20 @@ impl WorkflowContext {
             )
         })?;
 
-        if !git::is_git_repo_in(Some(&execution_dir))? {
-            return Err(anyhow!("Not in a git repository"));
-        }
+        let vcs_kind = vcs::detect_in(&execution_dir)?;
 
-        let main_worktree_root = git::get_main_worktree_root_in(Some(&execution_dir))
-            .context("Could not find the main git worktree")?;
+        let main_worktree_root = vcs::main_worktree_root_in(vcs_kind, &execution_dir)
+            .context("Could not find the main worktree")?;
 
-        let git_common_dir = git::get_git_common_dir_in(Some(&execution_dir))
-            .context("Could not find the git common directory")?;
+        let git_common_dir = match vcs_kind {
+            vcs::VcsKind::Git => git::get_git_common_dir_in(Some(&execution_dir))
+                .context("Could not find the git common directory")?,
+            // Kept for compatibility with deferred-cleanup data. Sapling cleanup
+            // never interprets this path as a Git directory.
+            vcs::VcsKind::Sapling => main_worktree_root.clone(),
+        };
 
-        let main_branch = resolve_main_branch(&config, &execution_dir)?;
+        let main_branch = resolve_main_reference(vcs_kind, &config, &execution_dir)?;
 
         let prefix = config.window_prefix().to_string();
 
@@ -112,6 +131,7 @@ impl WorkflowContext {
 
         debug!(
             execution_dir = %execution_dir.display(),
+            vcs = vcs_kind.name(),
             main_worktree_root = %main_worktree_root.display(),
             git_common_dir = %git_common_dir.display(),
             main_branch = %main_branch,
@@ -123,6 +143,7 @@ impl WorkflowContext {
         );
 
         Ok(Self {
+            vcs_kind,
             execution_dir,
             main_worktree_root,
             git_common_dir,
@@ -133,6 +154,76 @@ impl WorkflowContext {
             config_rel_dir,
             config_source_dir,
         })
+    }
+
+    pub fn metadata_store(&self) -> Result<vcs::WorktreeMetadataStore> {
+        vcs::WorktreeMetadataStore::new(self.vcs_kind, &self.main_worktree_root)
+    }
+
+    /// Read new state first and lazily import legacy Git-config metadata.
+    pub fn get_worktree_meta(&self, handle: &str, key: &str) -> Option<String> {
+        let store = self.metadata_store().ok()?;
+        if let Some(value) = store.get(handle, key) {
+            return Some(value);
+        }
+        if self.vcs_kind == vcs::VcsKind::Git
+            && let Some(value) = git::get_worktree_meta_in(handle, key, Some(&self.execution_dir))
+        {
+            let _ = store.set(handle, key, &value);
+            return Some(value);
+        }
+        None
+    }
+
+    pub fn set_worktree_meta(&self, handle: &str, key: &str, value: &str) -> Result<()> {
+        self.metadata_store()?.set(handle, key, value)
+    }
+
+    pub fn all_worktree_meta(&self, key: &str) -> std::collections::HashMap<String, String> {
+        let mut values = if self.vcs_kind == vcs::VcsKind::Git {
+            git::get_all_worktree_meta_key_in(Some(&self.execution_dir), key)
+        } else {
+            std::collections::HashMap::new()
+        };
+        if let Ok(store) = self.metadata_store() {
+            values.extend(store.get_all(key));
+        }
+        values
+    }
+
+    pub fn ensure_window_token(&self, handle: &str) -> Result<String> {
+        if let Some(token) = self.get_worktree_meta(handle, "window-token") {
+            return Ok(token);
+        }
+        let mut bytes = [0_u8; 16];
+        getrandom::fill(&mut bytes).context("Failed to generate worktree window token")?;
+        let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        self.set_worktree_meta(handle, "window-token", &token)?;
+        Ok(token)
+    }
+
+    pub fn worktree_mode(&self, handle: &str) -> Option<config::MuxMode> {
+        match self.get_worktree_meta(handle, "mode").as_deref() {
+            Some("session") => Some(config::MuxMode::Session),
+            Some("window") => Some(config::MuxMode::Window),
+            _ => None,
+        }
+    }
+
+    pub fn target_window(&self, handle: &str) -> Option<String> {
+        self.get_worktree_meta(handle, "target-window")
+    }
+
+    pub fn target_session(&self, handle: &str) -> Option<String> {
+        self.get_worktree_meta(handle, "target-session")
+    }
+
+    pub fn window_session(&self, handle: &str) -> Option<String> {
+        self.get_worktree_meta(handle, "window-session")
+    }
+
+    pub fn window_token(&self, handle: &str) -> Option<String> {
+        self.get_worktree_meta(handle, "window-token")
     }
 
     /// Return whether a path identifies the main worktree.

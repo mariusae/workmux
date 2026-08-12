@@ -2,10 +2,10 @@ use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::git;
 use crate::multiplexer::{AgentPane, Multiplexer};
 use crate::state::StateStore;
 use crate::util::canon_or_self;
+use crate::{git, vcs};
 
 /// Parsed agent target selector.
 enum AgentSelector {
@@ -38,7 +38,7 @@ impl AgentSelector {
 pub fn find_worktree_root(path: &Path) -> Option<PathBuf> {
     let mut current = path;
     loop {
-        if current.join(".git").exists() {
+        if current.join(".git").exists() || current.join(".sl").exists() {
             return Some(current.to_path_buf());
         }
         current = current.parent()?;
@@ -74,13 +74,12 @@ pub fn resolve_worktree_agents_from_snapshot(
             resolve_global_agents(agent_panes, &handle, Some(&project))
         }
         AgentSelector::Local(local_name) => {
-            // Try local git resolution first
-            let in_git_repo = git::get_repo_root_if_present()?.is_some();
-            let local_result = if in_git_repo {
-                match git::find_worktree(&local_name) {
-                    Ok((worktree_path, _branch)) => {
-                        Some(Ok(resolve_local_agents(agent_panes, &worktree_path)))
-                    }
+            // Try local repository resolution first.
+            let local_result = if let Ok(cwd) = std::env::current_dir()
+                && let Ok(kind) = vcs::detect_in(&cwd)
+            {
+                match vcs::find_worktree_in(kind, &local_name, &cwd) {
+                    Ok(worktree) => Some(Ok(resolve_local_agents(agent_panes, &worktree.path))),
                     Err(e) if e.downcast_ref::<git::WorktreeNotFound>().is_some() => None,
                     Err(e) => Some(Err(e)),
                 }

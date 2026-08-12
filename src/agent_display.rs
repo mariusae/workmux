@@ -60,7 +60,7 @@ pub fn extract_project_name(path: &Path) -> String {
     for ancestor in path.ancestors() {
         // Check if this is the git root (where .git is a directory, not a file)
         let git_path = ancestor.join(".git");
-        if git_path.is_dir()
+        if (git_path.is_dir() || ancestor.join(".sl").exists())
             && let Some(name) = ancestor.file_name()
         {
             return name.to_string_lossy().to_string();

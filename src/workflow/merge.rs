@@ -3,7 +3,7 @@ use anyhow::{Context, Result, anyhow};
 use crate::{cmd, git};
 use tracing::{debug, info};
 
-use super::cleanup::{self, get_worktree_mode};
+use super::cleanup;
 use super::context::WorkflowContext;
 use super::types::MergeResult;
 
@@ -67,7 +67,9 @@ pub fn merge(
         })?;
 
     // Capture mode BEFORE cleanup (cleanup removes the metadata)
-    let mode = get_worktree_mode(handle);
+    let mode = context
+        .worktree_mode(handle)
+        .unwrap_or(crate::config::MuxMode::Window);
 
     debug!(
         name = name,

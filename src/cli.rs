@@ -1,7 +1,7 @@
 use crate::command::args::{MultiArgs, PromptArgs, RescueArgs, SetupFlags};
 use crate::config::{MuxMode, SidebarPosition};
 use crate::workflow::pr::PrReference;
-use crate::{claude, command, config, git, nerdfont};
+use crate::{claude, command, config, git, nerdfont, vcs};
 use anyhow::{Context, Result};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -32,10 +32,21 @@ macro_rules! impl_passthrough_typed_value_parser {
 }
 
 fn try_list_worktrees() -> Option<Vec<(PathBuf, String)>> {
-    if !git::is_git_repo().unwrap_or(false) {
-        return None;
-    }
-    git::list_worktrees().ok()
+    let cwd = std::env::current_dir().ok()?;
+    let kind = vcs::detect_in(&cwd).ok()?;
+    vcs::list_worktrees_in(kind, &cwd).ok().map(|worktrees| {
+        worktrees
+            .into_iter()
+            .map(|worktree| {
+                let reference = if kind == vcs::VcsKind::Sapling {
+                    worktree.handle()
+                } else {
+                    worktree.reference
+                };
+                (worktree.path, reference)
+            })
+            .collect()
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -51,7 +62,10 @@ impl WorktreeBranchParser {
             return Vec::new();
         };
 
-        let main_branch = git::get_default_branch().ok();
+        let main_branch = vcs::detect()
+            .ok()
+            .filter(|kind| *kind == vcs::VcsKind::Git)
+            .and_then(|_| git::get_default_branch().ok());
 
         worktrees
             .into_iter()
@@ -80,7 +94,10 @@ impl WorktreeHandleParser {
             return Vec::new();
         };
 
-        let main_worktree_root = git::get_main_worktree_root().ok();
+        let main_worktree_root = std::env::current_dir().ok().and_then(|cwd| {
+            let kind = vcs::detect_in(&cwd).ok()?;
+            vcs::main_worktree_root_in(kind, &cwd).ok()
+        });
 
         worktrees
             .into_iter()
@@ -116,8 +133,9 @@ impl AgentTargetParser {
         let mut targets = WorktreeHandleParser::get_handles();
 
         // Also include the main worktree handle (agents can run there too)
-        if git::is_git_repo().unwrap_or(false)
-            && let Ok(main_root) = git::get_main_worktree_root()
+        if let Ok(cwd) = std::env::current_dir()
+            && let Ok(kind) = vcs::detect_in(&cwd)
+            && let Ok(main_root) = vcs::main_worktree_root_in(kind, &cwd)
             && let Some(name) = main_root.file_name()
         {
             let handle = name.to_string_lossy().to_string();
@@ -170,7 +188,7 @@ impl GitBranchParser {
 
     fn get_branches() -> Vec<String> {
         // Don't attempt completions if not in a git repo.
-        if !git::is_git_repo().unwrap_or(false) {
+        if vcs::detect().ok() != Some(vcs::VcsKind::Git) {
             return Vec::new();
         }
 

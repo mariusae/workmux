@@ -84,6 +84,26 @@ pub fn detect() -> Result<VcsKind> {
     detect_in(&cwd)
 }
 
+pub fn repo_root_in(kind: VcsKind, workdir: &Path) -> Result<PathBuf> {
+    match kind {
+        VcsKind::Git => crate::git::get_repo_root_for(workdir),
+        VcsKind::Sapling => {
+            let output = Command::new("sl")
+                .arg("root")
+                .current_dir(workdir)
+                .output()
+                .context("Failed to execute 'sl root'")?;
+            if !output.status.success() {
+                return Err(anyhow!(
+                    "Failed to find Sapling repository root: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+            Ok(PathBuf::from(String::from_utf8(output.stdout)?.trim()))
+        }
+    }
+}
+
 /// List linked working copies using the selected backend.
 pub fn list_worktrees_in(kind: VcsKind, workdir: &Path) -> Result<Vec<Worktree>> {
     match kind {

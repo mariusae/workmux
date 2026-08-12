@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
-use crate::{cmd, git, nerdfont};
+use crate::{cmd, nerdfont};
 use which::{which, which_in};
 
 /// Default script for cleaning up node_modules directories before worktree deletion.
@@ -1921,10 +1921,11 @@ pub struct ConfigLocation {
 pub fn find_project_config(start_dir: &Path) -> anyhow::Result<Option<ConfigLocation>> {
     let config_names = [".workmux.yaml", ".workmux.yml"];
 
-    let repo_root = match git::get_repo_root_for(start_dir) {
-        Ok(root) => root,
+    let vcs_kind = match crate::vcs::detect_in(start_dir) {
+        Ok(kind) => kind,
         Err(_) => return Ok(None),
     };
+    let repo_root = crate::vcs::repo_root_in(vcs_kind, start_dir)?;
 
     // Canonicalize both paths to handle symlinks and ensure consistent comparison
     let repo_root = repo_root.canonicalize().unwrap_or(repo_root);
@@ -1967,7 +1968,7 @@ pub fn find_project_config(start_dir: &Path) -> anyhow::Result<Option<ConfigLoca
     }
 
     // Fallback: check main worktree root (preserves existing behavior for linked worktrees)
-    if let Ok(main_root) = git::get_main_worktree_root() {
+    if let Ok(main_root) = crate::vcs::main_worktree_root_in(vcs_kind, start_dir) {
         let main_root = main_root.canonicalize().unwrap_or(main_root);
         if main_root != repo_root {
             for name in &config_names {
@@ -2224,17 +2225,21 @@ impl Config {
             (project_config, location)
         };
 
+        let detected_root = || {
+            let kind = crate::vcs::detect_in(start_dir).ok()?;
+            crate::vcs::repo_root_in(kind, start_dir).ok()
+        };
         let defaults_root = location
             .as_ref()
             .and_then(|loc| {
-                let repo_root = git::get_repo_root_for(start_dir).ok()?;
+                let repo_root = detected_root()?;
                 if loc.config_dir.starts_with(&repo_root) {
                     Some(loc.config_dir.clone())
                 } else {
                     Some(repo_root)
                 }
             })
-            .or_else(|| git::get_repo_root_for(start_dir).ok())
+            .or_else(detected_root)
             .unwrap_or_else(|| start_dir.to_path_buf());
 
         let config = Self::merge_and_apply_defaults(

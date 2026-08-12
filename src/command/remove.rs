@@ -1,6 +1,6 @@
 use crate::multiplexer::{create_backend, detect_backend};
 use crate::workflow::WorkflowContext;
-use crate::{config, git, spinner, workflow};
+use crate::{config, git, spinner, vcs, workflow};
 use anyhow::{Context, Result, anyhow};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -42,31 +42,31 @@ fn run_specified(names: Vec<String>, force: bool, keep_branch: bool) -> Result<(
     // 2. Resolve all targets and validate they exist
     let mut candidates: Vec<(String, PathBuf, String)> = Vec::new();
     for name in resolved_names {
-        let (worktree_path, branch_name) = match git::find_worktree(&name) {
-            Ok(worktree) => worktree,
-            Err(e) => {
-                if let Some(path) = workflow::fallback_worktree_path(&name, &context)? {
-                    (path, String::new())
-                } else {
-                    return Err(anyhow!(
+        let (worktree_path, branch_name, handle) =
+            match vcs::find_worktree_in(context.vcs_kind, &name, &context.execution_dir) {
+                Ok(worktree) => {
+                    let handle = worktree.handle();
+                    let reference = if context.vcs_kind == vcs::VcsKind::Sapling {
+                        handle.clone()
+                    } else {
+                        worktree.reference
+                    };
+                    (worktree.path, reference, handle)
+                }
+                Err(e) => {
+                    if context.vcs_kind == vcs::VcsKind::Git
+                        && let Some(path) = workflow::fallback_worktree_path(&name, &context)?
+                    {
+                        (path, String::new(), name.clone())
+                    } else {
+                        return Err(anyhow!(
                         "Worktree '{}' not found. Use 'workmux list' to see available worktrees.",
                         name
                     )
                     .context(e));
+                    }
                 }
-            }
-        };
-
-        let handle = worktree_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| {
-                anyhow!(
-                    "Could not derive handle from worktree path: {:?}",
-                    worktree_path
-                )
-            })?
-            .to_string();
+            };
 
         candidates.push((handle, worktree_path, branch_name));
     }
@@ -100,8 +100,8 @@ fn run_specified(names: Vec<String>, force: bool, keep_branch: bool) -> Result<(
     for (handle, path, branch) in candidates {
         // Check uncommitted (blocking)
         if path.exists()
-            && !git::has_missing_admin_dir(&path)
-            && git::has_uncommitted_changes(&path).unwrap_or(false)
+            && (context.vcs_kind != vcs::VcsKind::Git || !git::has_missing_admin_dir(&path))
+            && vcs::has_uncommitted_changes(context.vcs_kind, &path).unwrap_or(false)
         {
             uncommitted.push(handle);
             continue;
@@ -116,7 +116,10 @@ fn run_specified(names: Vec<String>, force: bool, keep_branch: bool) -> Result<(
         }
 
         // Check unmerged (promptable), only if we're deleting the branch
-        if !keep_branch && let Some(base) = is_unmerged(&branch)? {
+        if context.vcs_kind == vcs::VcsKind::Git
+            && !keep_branch
+            && let Some(base) = is_unmerged(&branch)?
+        {
             unmerged.push((handle, branch, base));
             continue;
         }
@@ -345,21 +348,29 @@ fn collect_bulk_removal_plan(
     force: bool,
     keep_branch: bool,
 ) -> Result<BulkRemovalPlan> {
-    let worktrees = git::list_worktrees()?;
-    let main_branch = git::get_default_branch()?;
-    let main_worktree_root = git::get_main_worktree_root()?;
+    let cwd = std::env::current_dir()?;
+    let vcs_kind = vcs::detect_in(&cwd)?;
+    let worktrees = vcs::list_worktrees_in(vcs_kind, &cwd)?;
+    let main_branch = if vcs_kind == vcs::VcsKind::Git {
+        git::get_default_branch()?
+    } else {
+        ".".to_string()
+    };
 
     let mut plan = BulkRemovalPlan {
         to_remove: Vec::new(),
         skipped: Vec::new(),
     };
 
-    for (path, branch) in worktrees {
-        if branch == main_branch || branch == "(detached)" {
-            continue;
-        }
-
-        if path == main_worktree_root {
+    for worktree in worktrees {
+        let handle = worktree.handle();
+        let branch = if vcs_kind == vcs::VcsKind::Sapling {
+            handle
+        } else {
+            worktree.reference
+        };
+        let path = worktree.path;
+        if worktree.is_main || (vcs_kind == vcs::VcsKind::Git && branch == main_branch) {
             continue;
         }
 
@@ -367,7 +378,8 @@ fn collect_bulk_removal_plan(
             continue;
         }
 
-        if !force && path.exists() && git::has_uncommitted_changes(&path).unwrap_or(false) {
+        if !force && path.exists() && vcs::has_uncommitted_changes(vcs_kind, &path).unwrap_or(false)
+        {
             plan.skipped.push(BulkSkippedWorktree {
                 branch,
                 reason: BulkSkipReason::Uncommitted,
@@ -375,7 +387,7 @@ fn collect_bulk_removal_plan(
             continue;
         }
 
-        if mode.allow_unmerged_skip() && !force && !keep_branch {
+        if vcs_kind == vcs::VcsKind::Git && mode.allow_unmerged_skip() && !force && !keep_branch {
             let base = git::get_branch_base(&branch)
                 .ok()
                 .unwrap_or_else(|| main_branch.clone());
