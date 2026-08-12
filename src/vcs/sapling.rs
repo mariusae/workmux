@@ -6,7 +6,11 @@ use std::process::Command;
 use super::Worktree;
 
 pub(super) fn has_uncommitted_changes(worktree: &Path) -> Result<bool> {
-    let output = Command::new("sl")
+    has_uncommitted_changes_with_program(Path::new("sl"), worktree)
+}
+
+fn has_uncommitted_changes_with_program(program: &Path, worktree: &Path) -> Result<bool> {
+    let output = Command::new(program)
         .arg("status")
         .current_dir(worktree)
         .output()
@@ -22,10 +26,14 @@ pub(super) fn has_uncommitted_changes(worktree: &Path) -> Result<bool> {
 }
 
 pub(super) fn remove_worktree_in(path: &Path, workdir: &Path) -> Result<()> {
-    let output = Command::new("sl")
+    remove_worktree_with_program(Path::new("sl"), path, workdir)
+}
+
+fn remove_worktree_with_program(program: &Path, path: &Path, workdir: &Path) -> Result<()> {
+    let output = Command::new(program)
         .args(["worktree", "remove"])
         .arg(path)
-        .arg("--noninteractive")
+        .arg("-y")
         .current_dir(workdir)
         .output()
         .context("Failed to execute 'sl worktree remove'")?;
@@ -40,7 +48,16 @@ pub(super) fn remove_worktree_in(path: &Path, workdir: &Path) -> Result<()> {
 }
 
 pub(super) fn label_worktree_in(path: &Path, label: &str, workdir: &Path) -> Result<()> {
-    let output = Command::new("sl")
+    label_worktree_with_program(Path::new("sl"), path, label, workdir)
+}
+
+fn label_worktree_with_program(
+    program: &Path,
+    path: &Path,
+    label: &str,
+    workdir: &Path,
+) -> Result<()> {
+    let output = Command::new(program)
         .args(["worktree", "label"])
         .arg(path)
         .arg(label)
@@ -63,7 +80,17 @@ pub(super) fn create_worktree_in(
     revision: Option<&str>,
     workdir: &Path,
 ) -> Result<()> {
-    let mut command = Command::new("sl");
+    create_worktree_with_program(Path::new("sl"), path, label, revision, workdir)
+}
+
+fn create_worktree_with_program(
+    program: &Path,
+    path: &Path,
+    label: &str,
+    revision: Option<&str>,
+    workdir: &Path,
+) -> Result<()> {
+    let mut command = Command::new(program);
     command
         .args(["worktree", "add"])
         .arg(path)
@@ -87,7 +114,11 @@ pub(super) fn create_worktree_in(
 }
 
 pub(super) fn list_worktrees_in(workdir: &Path) -> Result<Vec<Worktree>> {
-    let output = Command::new("sl")
+    list_worktrees_with_program(Path::new("sl"), workdir)
+}
+
+fn list_worktrees_with_program(program: &Path, workdir: &Path) -> Result<Vec<Worktree>> {
+    let output = Command::new(program)
         .args(["worktree", "list", "-Tjson"])
         .current_dir(workdir)
         .output()
@@ -130,7 +161,7 @@ pub(super) fn parse_worktree_list_json(output: &str) -> Result<Vec<Worktree>> {
             .unwrap_or_else(|| "(detached)".to_string());
         let is_main = bool_field(entry, &["is_main", "main"])
             .or_else(|| {
-                string_field(entry, &["kind", "type"])
+                string_field(entry, &["role", "kind", "type"])
                     .map(|kind| matches!(kind, "main" | "primary"))
             })
             // Sapling documents the designated main worktree first. Retain
@@ -150,14 +181,19 @@ pub(super) fn parse_worktree_list_json(output: &str) -> Result<Vec<Worktree>> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_worktree_list_json;
+    use super::{
+        create_worktree_with_program, has_uncommitted_changes_with_program,
+        label_worktree_with_program, list_worktrees_with_program, parse_worktree_list_json,
+        remove_worktree_with_program,
+    };
+    use std::path::Path;
 
     #[test]
     fn parses_sapling_worktree_json() {
         let worktrees = parse_worktree_list_json(
             r#"[
-                {"path":"/repo/main","label":"","is_main":true,"revision":"abc"},
-                {"path":"/repo/wt/feature","label":"feature","is_main":false,"revision":"def"}
+                {"path":"/repo/main","role":"main","current":true},
+                {"path":"/repo/wt/feature","role":"linked","label":"feature","current":false}
             ]"#,
         )
         .unwrap();
@@ -165,7 +201,7 @@ mod tests {
         assert_eq!(worktrees.len(), 2);
         assert!(worktrees[0].is_main);
         assert_eq!(worktrees[1].handle(), "feature");
-        assert_eq!(worktrees[1].reference, "def");
+        assert_eq!(worktrees[1].reference, "feature");
     }
 
     #[test]
@@ -177,5 +213,53 @@ mod tests {
 
         assert!(worktrees[0].is_main);
         assert_eq!(worktrees[1].handle(), "a");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invokes_sapling_worktree_contract() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let program = temp.path().join("sl");
+        let log = temp.path().join("commands.log");
+        let script = format!(
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$*\" >> '{}'\n\
+             if [ \"$*\" = 'worktree list -Tjson' ]; then\n\
+               printf '%s\\n' '[{{\"path\":\"/repo\",\"role\":\"main\",\"current\":true}},{{\"path\":\"/repo/wt/feature\",\"role\":\"linked\",\"label\":\"feature\",\"current\":false}}]'\n\
+             elif [ \"$*\" = 'status' ]; then\n\
+               printf '%s\\n' 'M file.txt'\n\
+             fi\n",
+            log.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        let mut permissions = std::fs::metadata(&program).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&program, permissions).unwrap();
+
+        let destination = Path::new("/repo/wt/feature");
+        create_worktree_with_program(
+            &program,
+            destination,
+            "feature",
+            Some("stable"),
+            temp.path(),
+        )
+        .unwrap();
+        let listed = list_worktrees_with_program(&program, temp.path()).unwrap();
+        assert_eq!(listed[1].handle(), "feature");
+        assert!(has_uncommitted_changes_with_program(&program, temp.path()).unwrap());
+        label_worktree_with_program(&program, destination, "renamed", temp.path()).unwrap();
+        remove_worktree_with_program(&program, destination, temp.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(log).unwrap(),
+            "worktree add /repo/wt/feature --label feature --rev stable\n\
+             worktree list -Tjson\n\
+             status\n\
+             worktree label /repo/wt/feature renamed\n\
+             worktree remove /repo/wt/feature -y\n"
+        );
     }
 }

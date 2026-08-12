@@ -20,12 +20,13 @@
 ---
 
 Giga opinionated zero-friction workflow tool for managing
-[git worktrees](https://git-scm.com/docs/git-worktree) and tmux windows as
+[Git worktrees](https://git-scm.com/docs/git-worktree), Sapling worktrees, and tmux windows as
 isolated development environments. Perfect for running multiple AI agents in
 parallel without conflict.
 
 **Philosophy**: Build on tools you already use. tmux/zellij/kitty/etc. for
-windowing, git for worktrees, your agent for coding - workmux ties them together.
+windowing, Git or Sapling for worktrees, your agent for coding - workmux ties
+them together.
 
 <sup><sub>\* Also supports
 <a href="https://workmux.raine.dev/guide/kitty">kitty</a>,
@@ -67,7 +68,7 @@ New to worktrees? See [Why git worktrees?](#why-git-worktrees)
 
 ## Features
 
-- Create git worktrees with matching tmux windows in a single command (`add`)
+- Create Git or Sapling worktrees with matching tmux windows in a single command (`add`)
 - Merge branches and clean up everything (worktree, tmux window, branches) in
   one command (`merge`)
 - [Dashboard](#workmux-dashboard) for monitoring agents, reviewing changes, and
@@ -169,6 +170,12 @@ For manual installation, see
 > before you start. See [My tmux setup](https://raine.dev/blog/my-tmux-setup/)
 > if you need a starting point.
 
+> [!NOTE]
+> EdenFS-backed Sapling repositories are detected automatically. The core
+> `add`, `list`, `open`, `close`, `remove`, `rename`, `path`, `setup`, and
+> agent-dispatch workflows use `sl worktree`. Git-specific operations such as
+> `merge`, `rebase`, PR checkout, and `remove --gone` remain Git-only.
+
 1. **Initialize configuration (optional)**:
 
    ```bash
@@ -186,7 +193,7 @@ For manual installation, see
    ```
 
    This will:
-   - Create a git worktree at
+   - Create a Git worktree, or an EdenFS-backed Sapling worktree, at
      `<project_root>/../<project_name>__worktrees/new-feature`
    - Copy config files and symlink dependencies (if
      [configured](#file-operations))

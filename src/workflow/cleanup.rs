@@ -1177,6 +1177,29 @@ mod tests {
     }
 
     #[test]
+    fn deferred_sapling_cleanup_uses_sl_without_filesystem_deletion() {
+        let mut dc = make_deferred_cleanup(
+            "/repo/worktrees/feature",
+            "/repo/worktrees/.workmux_trash_feature_123",
+            "feature",
+            "feature",
+            "/repo/main",
+            false,
+            false,
+        );
+        dc.vcs_kind = vcs::VcsKind::Sapling;
+
+        let script = build_deferred_cleanup_script(&dc);
+        assert_eq!(
+            script,
+            "; sl -R /repo/main worktree remove /repo/worktrees/feature -y >/dev/null 2>&1"
+        );
+        assert!(!script.contains("mv "));
+        assert!(!script.contains("rm -rf"));
+        assert!(!script.contains("git "));
+    }
+
+    #[test]
     fn deferred_cleanup_script_simple_paths_not_quoted() {
         let dc = make_deferred_cleanup(
             "/repo/worktrees/feature-branch",

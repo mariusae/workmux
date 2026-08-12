@@ -33,12 +33,16 @@ impl AgentSelector {
 
 /// Walk up from `path` to find the containing worktree/repo root.
 ///
-/// Git worktrees have a `.git` file; regular repos have a `.git` directory.
-/// Returns `None` if no `.git` is found (e.g. path is outside any repo).
+/// Git worktrees have `.git`; Sapling/EdenFS worktrees expose `.hg` or `.eden`.
+/// Returns `None` if no repository marker is found.
 pub fn find_worktree_root(path: &Path) -> Option<PathBuf> {
     let mut current = path;
     loop {
-        if current.join(".git").exists() || current.join(".sl").exists() {
+        if current.join(".git").exists()
+            || current.join(".sl").exists()
+            || current.join(".hg").exists()
+            || current.join(".eden").exists()
+        {
             return Some(current.to_path_buf());
         }
         current = current.parent()?;

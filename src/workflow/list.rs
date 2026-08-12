@@ -94,6 +94,10 @@ pub fn list_in(
         .iter()
         .find(|worktree| worktree.is_main)
         .map(|worktree| worktree.path.clone());
+    let backend_handles: std::collections::HashMap<PathBuf, String> = worktrees
+        .iter()
+        .map(|worktree| (worktree.path.clone(), worktree.handle()))
+        .collect();
 
     // Apply filter early before expensive operations
     let worktrees_data = filter_worktrees(worktrees_data, filter);
@@ -201,11 +205,12 @@ pub fn list_in(
         .into_iter()
         .map(|(path, branch)| {
             // Extract handle from worktree path basename (the source of truth)
-            let handle = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(&branch)
-                .to_string();
+            let handle = backend_handles.get(&path).cloned().unwrap_or_else(|| {
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&branch)
+                    .to_string()
+            });
 
             // Check if mux target exists (window or session based on stored mode)
             let mode = worktree_modes

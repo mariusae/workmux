@@ -146,6 +146,7 @@ export default defineConfig({
             { label: "Session mode", slug: "guide/session-mode" },
             { label: "direnv", slug: "guide/direnv" },
             { label: "Monorepos", slug: "guide/monorepos" },
+            { label: "Sapling worktrees", slug: "guide/sapling" },
             {
               label: "Git worktree caveats",
               slug: "guide/git-worktree-caveats",
