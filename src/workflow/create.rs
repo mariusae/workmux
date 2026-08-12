@@ -53,6 +53,10 @@ pub fn create(context: &WorkflowContext, args: CreateArgs) -> Result<CreateResul
         fork_source,
     } = args;
 
+    if remote_branch.is_some() || pr_number.is_some() {
+        vcs::require_git(context.vcs_kind, "remote branch and PR checkout")?;
+    }
+
     info!(
         branch = branch_name,
         handle = handle,
@@ -594,6 +598,10 @@ pub fn create_with_changes(
     context: &WorkflowContext,
     options: SetupOptions,
 ) -> Result<CreateResult> {
+    vcs::require_git(
+        context.vcs_kind,
+        "moving changes with workmux add --with-changes",
+    )?;
     info!(
         branch = branch_name,
         handle = handle,

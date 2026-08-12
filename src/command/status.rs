@@ -188,6 +188,9 @@ fn compute_git_info(wt_path: &std::path::Path, branch: &str) -> Result<GitInfo> 
 }
 
 pub fn run(worktrees: &[String], json: bool, show_git: bool) -> Result<()> {
+    if show_git && let Ok(kind) = crate::vcs::detect() {
+        crate::vcs::require_git(kind, "workmux status --git")?;
+    }
     let mux = create_backend(detect_backend_strict()?);
     let store = StateStore::open_read_only()?;
     let mut report = store.load_reconciled_agent_report(mux.as_ref())?;

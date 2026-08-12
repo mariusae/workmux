@@ -241,6 +241,13 @@ pub fn run(
     if !dry_run {
         check_preconditions()?;
     }
+    let vcs_kind = vcs::detect()?;
+    if pr.is_some() {
+        vcs::require_git(vcs_kind, "workmux add --pr")?;
+    }
+    if rescue.with_changes {
+        vcs::require_git(vcs_kind, "workmux add --with-changes")?;
+    }
 
     // Extract sandbox override before consuming setup flags
     let sandbox_override = setup.sandbox;
@@ -263,7 +270,8 @@ pub fn run(
             })?;
 
         // Use worktree root (not cwd) so subdirectory invocation works correctly
-        let source_path = git::get_repo_root()?;
+        let cwd = std::env::current_dir()?;
+        let source_path = vcs::repo_root_in(vcs_kind, &cwd)?;
         let session = if fork_arg.is_empty() {
             // --fork without value: use most recent
             forker
@@ -521,7 +529,9 @@ pub fn run(
     // always identify local branches, even when their first component names a remote.
     // Only pass CLI --base to detect_remote_branch; config base_branch should not
     // interfere with remote/fork branch detection.
-    let (remote_branch, template_base_name) = if let Some(ref pr_remote) = remote_branch_for_pr {
+    let (remote_branch, template_base_name) = if vcs_kind == vcs::VcsKind::Sapling {
+        (None, branch_name.to_string())
+    } else if let Some(ref pr_remote) = remote_branch_for_pr {
         (Some(pr_remote.clone()), branch_name.to_string())
     } else if auto_name {
         (None, branch_name.to_string())
@@ -975,13 +985,16 @@ fn print_dry_run(
         crate::config::validate_panes_config(panes)?;
     }
 
-    let branch_exists = git::branch_exists_in(branch_name, Some(&context.execution_dir))?;
+    let branch_exists = context.vcs_kind == vcs::VcsKind::Git
+        && git::branch_exists_in(branch_name, Some(&context.execution_dir))?;
     let base = if let Some(remote) = remote_branch {
         remote.to_string()
     } else if branch_exists {
         "existing branch".to_string()
     } else if let Some(base) = base_branch.filter(|base| !base.trim().is_empty()) {
         base.to_string()
+    } else if context.vcs_kind == vcs::VcsKind::Sapling {
+        ".".to_string()
     } else {
         git::get_current_branch_in(&context.execution_dir)
             .context("Failed to determine the current branch to use as the base")?

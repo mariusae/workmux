@@ -19,6 +19,12 @@ pub fn rename(
     rename_branch: bool,
     context: &WorkflowContext,
 ) -> Result<RenameResult> {
+    if rename_branch {
+        vcs::require_git(
+            context.vcs_kind,
+            "renaming a branch with workmux rename --branch",
+        )?;
+    }
     // 1. Resolve source worktree. `user_target` may be a handle OR a branch;
     //    `find_worktree` handles both. Always derive the authoritative handle
     //    from the worktree's directory basename to keep metadata/tmux/state

@@ -482,6 +482,8 @@ fn run_all(force: bool, keep_branch: bool) -> Result<()> {
 
 /// Remove worktrees whose upstream remote branch has been deleted
 fn run_gone(force: bool, keep_branch: bool) -> Result<()> {
+    let kind = vcs::detect()?;
+    vcs::require_git(kind, "workmux remove --gone")?;
     // Fetch with prune to update remote-tracking refs
     spinner::with_spinner("Fetching from remote", git::fetch_prune)?;
     let gone_branches = git::get_gone_branches().unwrap_or_default();
@@ -499,7 +501,9 @@ fn remove_worktree(handle: &str, force: bool, keep_branch: bool) -> Result<()> {
     let result = workflow::remove(handle, force, keep_branch, &context)
         .context("Failed to remove worktree")?;
 
-    if keep_branch {
+    if context.vcs_kind == vcs::VcsKind::Sapling {
+        println!("✓ Removed Sapling worktree '{}'", handle);
+    } else if keep_branch {
         println!(
             "✓ Removed worktree '{}' (branch '{}' kept)",
             handle, result.branch_removed

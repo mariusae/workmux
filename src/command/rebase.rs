@@ -1,8 +1,10 @@
 use anyhow::{Context, Result, anyhow};
 
-use crate::{config, git};
+use crate::{config, git, vcs};
 
 pub fn run(name: Option<&str>) -> Result<()> {
+    let kind = vcs::detect()?;
+    vcs::require_git(kind, "workmux rebase")?;
     let name_to_rebase = super::resolve_name(name)?;
     let config = config::Config::load(None)?;
 

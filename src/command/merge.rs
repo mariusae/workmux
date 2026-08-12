@@ -1,7 +1,7 @@
 use crate::config::MergeStrategy;
 use crate::multiplexer::{create_backend, detect_backend};
 use crate::workflow::WorkflowContext;
-use crate::{config, workflow};
+use crate::{config, vcs, workflow};
 use anyhow::{Context, Result, bail};
 
 #[allow(clippy::too_many_arguments)]
@@ -63,6 +63,7 @@ pub fn run(
 
     let mux = create_backend(detect_backend());
     let context = WorkflowContext::new(config, mux, None)?;
+    vcs::require_git(context.vcs_kind, "workmux merge")?;
 
     let skip_hooks = no_verify || no_hooks;
 

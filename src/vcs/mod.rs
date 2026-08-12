@@ -25,6 +25,17 @@ impl VcsKind {
     }
 }
 
+pub fn require_git(kind: VcsKind, operation: &str) -> Result<()> {
+    if kind == VcsKind::Git {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "{} is not supported for Sapling worktrees; run the equivalent Sapling workflow directly",
+            operation
+        ))
+    }
+}
+
 /// Backend-neutral description of a linked working copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
