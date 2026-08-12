@@ -120,6 +120,39 @@ pub fn find_worktree_in(kind: VcsKind, name: &str, workdir: &Path) -> Result<Wor
         .ok_or_else(|| crate::git::WorktreeNotFound(name.to_string()).into())
 }
 
+pub struct CreateWorktree<'a> {
+    pub path: &'a Path,
+    pub handle: &'a str,
+    /// Git branch name. Sapling uses this only as a fallback revision.
+    pub reference: &'a str,
+    pub create_reference: bool,
+    pub base: Option<&'a str>,
+    pub track_upstream: bool,
+}
+
+pub fn create_worktree_in(
+    kind: VcsKind,
+    request: &CreateWorktree<'_>,
+    workdir: &Path,
+) -> Result<()> {
+    match kind {
+        VcsKind::Git => crate::git::create_worktree_in(
+            request.path,
+            request.reference,
+            request.create_reference,
+            request.base,
+            request.track_upstream,
+            Some(workdir),
+        ),
+        VcsKind::Sapling => sapling::create_worktree_in(
+            request.path,
+            request.handle,
+            request.base.or(Some(".")),
+            workdir,
+        ),
+    }
+}
+
 fn paths_equal(left: &Path, right: &Path) -> bool {
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,

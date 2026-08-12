@@ -5,6 +5,35 @@ use std::process::Command;
 
 use super::Worktree;
 
+pub(super) fn create_worktree_in(
+    path: &Path,
+    label: &str,
+    revision: Option<&str>,
+    workdir: &Path,
+) -> Result<()> {
+    let mut command = Command::new("sl");
+    command
+        .args(["worktree", "add"])
+        .arg(path)
+        .args(["--label", label]);
+    if let Some(revision) = revision.filter(|revision| !revision.is_empty()) {
+        command.args(["--rev", revision]);
+    }
+
+    let output = command
+        .current_dir(workdir)
+        .output()
+        .context("Failed to execute 'sl worktree add'")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "Failed to create Sapling worktree '{}': {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn list_worktrees_in(workdir: &Path) -> Result<Vec<Worktree>> {
     let output = Command::new("sl")
         .args(["worktree", "list", "-Tjson"])
