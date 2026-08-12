@@ -199,8 +199,10 @@ workmux add -d my-task # creates YYYY-MM-DD-my-task
    ```
 
    This will:
-   - Create a Git worktree, or an EdenFS-backed Sapling worktree, at
-     `<project_root>/../<project_name>__worktrees/new-feature`
+   - Create a Git worktree at
+     `<project_root>/../<project_name>__worktrees/new-feature`, or an
+     EdenFS-backed Sapling worktree at
+     `<project_root>/../<project_name>-new-feature`
    - Copy config files and symlink dependencies (if
      [configured](#file-operations))
    - Run any [`post_create`](#lifecycle-hooks) setup commands

@@ -17,6 +17,11 @@ workmux remove my-task
 Use `-d` to prefix both the worktree label and workmux handle with today's
 date, for example `workmux add -d my-task` creates `2026-08-12-my-task`.
 
+By default, Sapling worktrees are sibling EdenFS mounts. For a main checkout at
+`/data/users/me/fbsource`, `workmux add my-task` creates
+`/data/users/me/fbsource-my-task`. An explicit `worktree_dir` configuration
+continues to override this default.
+
 For Sapling, the workmux handle is stored as the worktree label. `add` creates
 the working copy at the requested base revision (or `.` by default), and
 `rename` changes the label without moving the EdenFS mount point. Removal is
