@@ -5,6 +5,58 @@ use std::process::Command;
 
 use super::Worktree;
 
+pub(super) fn has_uncommitted_changes(worktree: &Path) -> Result<bool> {
+    let output = Command::new("sl")
+        .arg("status")
+        .current_dir(worktree)
+        .output()
+        .context("Failed to execute 'sl status'")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "Failed to inspect Sapling worktree '{}': {}",
+            worktree.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(!output.stdout.is_empty())
+}
+
+pub(super) fn remove_worktree_in(path: &Path, workdir: &Path) -> Result<()> {
+    let output = Command::new("sl")
+        .args(["worktree", "remove"])
+        .arg(path)
+        .arg("--noninteractive")
+        .current_dir(workdir)
+        .output()
+        .context("Failed to execute 'sl worktree remove'")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "Failed to remove Sapling worktree '{}': {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn label_worktree_in(path: &Path, label: &str, workdir: &Path) -> Result<()> {
+    let output = Command::new("sl")
+        .args(["worktree", "label"])
+        .arg(path)
+        .arg(label)
+        .current_dir(workdir)
+        .output()
+        .context("Failed to execute 'sl worktree label'")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "Failed to label Sapling worktree '{}': {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn create_worktree_in(
     path: &Path,
     label: &str,

@@ -156,6 +156,54 @@ pub fn create_worktree_in(
     }
 }
 
+pub fn has_uncommitted_changes(kind: VcsKind, worktree: &Path) -> Result<bool> {
+    match kind {
+        VcsKind::Git => crate::git::has_uncommitted_changes(worktree),
+        VcsKind::Sapling => sapling::has_uncommitted_changes(worktree),
+    }
+}
+
+/// Ask the VCS to unregister and remove a linked worktree. Callers must move
+/// their own CWD and stop processes using the worktree before invoking this.
+pub fn remove_worktree_in(
+    kind: VcsKind,
+    worktree: &Path,
+    force: bool,
+    workdir: &Path,
+) -> Result<()> {
+    match kind {
+        VcsKind::Git => {
+            let path = worktree
+                .to_str()
+                .ok_or_else(|| anyhow!("Invalid worktree path"))?;
+            let mut command = crate::cmd::Cmd::new("git")
+                .workdir(workdir)
+                .args(&["worktree", "remove"]);
+            if force {
+                command = command.arg("--force");
+            }
+            command.arg(path).run()?;
+            Ok(())
+        }
+        VcsKind::Sapling => sapling::remove_worktree_in(worktree, workdir),
+    }
+}
+
+/// Rename the backend-owned worktree identity. Git moves the working copy;
+/// Sapling paths are EdenFS mount points and can only be relabeled safely.
+pub fn rename_worktree_in(
+    kind: VcsKind,
+    old_path: &Path,
+    new_path: &Path,
+    new_handle: &str,
+    workdir: &Path,
+) -> Result<()> {
+    match kind {
+        VcsKind::Git => crate::git::move_worktree(old_path, new_path),
+        VcsKind::Sapling => sapling::label_worktree_in(old_path, new_handle, workdir),
+    }
+}
+
 fn paths_equal(left: &Path, right: &Path) -> bool {
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
