@@ -28,6 +28,7 @@ mod tips;
 mod tmux_style;
 mod ui;
 mod util;
+mod vcs;
 mod workflow;
 mod xdg;
 
