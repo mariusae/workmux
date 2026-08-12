@@ -290,6 +290,14 @@ enum Commands {
         #[arg(short = 'A', long = "auto-name", conflicts_with = "pr")]
         auto_name: bool,
 
+        /// Prefix the branch and worktree name with today's date (YYYY-MM-DD)
+        #[arg(
+            short = 'd',
+            long = "date-prefix",
+            conflicts_with_all = ["pr", "auto_name"]
+        )]
+        date_prefix: bool,
+
         /// Base branch/commit/tag to branch from (overrides config base_branch; config may use "auto"; defaults to current branch)
         #[arg(long)]
         base: Option<String>,
@@ -936,6 +944,7 @@ pub fn run() -> Result<()> {
             branch_name,
             pr,
             auto_name,
+            date_prefix,
             base,
             name,
             target_name,
@@ -959,6 +968,7 @@ pub fn run() -> Result<()> {
                 branch_name.as_deref(),
                 pr,
                 auto_name,
+                date_prefix,
                 base.as_deref(),
                 name,
                 target_name,
@@ -1280,6 +1290,32 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::ValueValidation);
         assert!(err.to_string().contains("full GitHub pull request URL"));
+    }
+
+    #[test]
+    fn add_date_prefix_short_flag_parses() {
+        let cli = Cli::try_parse_from(["workmux", "add", "-d", "my-task"]).unwrap();
+
+        match cli.command {
+            Commands::Add {
+                branch_name,
+                date_prefix,
+                ..
+            } => {
+                assert_eq!(branch_name.as_deref(), Some("my-task"));
+                assert!(date_prefix);
+            }
+            _ => panic!("expected add command"),
+        }
+    }
+
+    #[test]
+    fn add_date_prefix_rejects_auto_name() {
+        let err = match Cli::try_parse_from(["workmux", "add", "-d", "-A", "-p", "task"]) {
+            Ok(_) => panic!("date prefix and auto-name should conflict"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]

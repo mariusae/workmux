@@ -79,6 +79,23 @@ fn generate_branch_name_with_spinner(
     Ok(generated)
 }
 
+fn prefix_with_date(name: &str, date: time::Date) -> String {
+    format!(
+        "{:04}-{:02}-{:02}-{}",
+        date.year(),
+        u8::from(date.month()),
+        date.day(),
+        name
+    )
+}
+
+fn current_local_date() -> time::Date {
+    let now = time::OffsetDateTime::now_utc();
+    time::UtcOffset::current_local_offset()
+        .map(|offset| now.to_offset(offset).date())
+        .unwrap_or_else(|_| now.date())
+}
+
 /// Check for and read lines from stdin if available.
 fn read_stdin_lines() -> Result<Vec<String>> {
     let stdin = std::io::stdin();
@@ -186,6 +203,7 @@ pub fn run(
     branch_name: Option<&str>,
     pr: Option<PrReference>,
     auto_name: bool,
+    date_prefix: bool,
     base: Option<&str>,
     name: Option<String>,
     target_name: Option<String>,
@@ -201,6 +219,14 @@ pub fn run(
     mode_override: Option<MuxMode>,
     config_override: Option<&std::path::Path>,
 ) -> Result<()> {
+    let dated_branch_name = date_prefix.then(|| {
+        prefix_with_date(
+            branch_name.expect("branch_name required with --date-prefix"),
+            current_local_date(),
+        )
+    });
+    let branch_name = dated_branch_name.as_deref().or(branch_name);
+
     // Inside a sandbox guest, route through RPC to the host supervisor
     if crate::sandbox::guest::is_sandbox_guest() {
         if dry_run {
@@ -1186,5 +1212,17 @@ fn run_add_via_rpc(
             bail!("Host failed to spawn agent: {}", message)
         }
         other => bail!("Unexpected RPC response: {:?}", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefix_with_date;
+    use time::{Date, Month};
+
+    #[test]
+    fn date_prefix_uses_iso_date() {
+        let date = Date::from_calendar_date(2026, Month::August, 12).unwrap();
+        assert_eq!(prefix_with_date("my-task", date), "2026-08-12-my-task");
     }
 }

@@ -176,6 +176,12 @@ For manual installation, see
 > agent-dispatch workflows use `sl worktree`. Git-specific operations such as
 > `merge`, `rebase`, PR checkout, and `remove --gone` remain Git-only.
 
+Prefix a task with today's date using `-d`:
+
+```bash
+workmux add -d my-task # creates YYYY-MM-DD-my-task
+```
+
 1. **Initialize configuration (optional)**:
 
    ```bash
