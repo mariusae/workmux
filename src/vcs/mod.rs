@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod sapling;
+
 /// Version-control implementation backing the current repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -77,4 +79,50 @@ pub fn detect_in(path: &Path) -> Result<VcsKind> {
 pub fn detect() -> Result<VcsKind> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     detect_in(&cwd)
+}
+
+/// List linked working copies using the selected backend.
+pub fn list_worktrees_in(kind: VcsKind, workdir: &Path) -> Result<Vec<Worktree>> {
+    match kind {
+        VcsKind::Git => {
+            let entries = crate::git::list_worktrees_in(Some(workdir))?;
+            let main_path = crate::git::get_main_worktree_root_in(Some(workdir))?;
+            Ok(entries
+                .into_iter()
+                .map(|(path, reference)| Worktree {
+                    is_main: paths_equal(&path, &main_path),
+                    path,
+                    reference,
+                    label: None,
+                })
+                .collect())
+        }
+        VcsKind::Sapling => sapling::list_worktrees_in(workdir),
+    }
+}
+
+pub fn main_worktree_root_in(kind: VcsKind, workdir: &Path) -> Result<PathBuf> {
+    list_worktrees_in(kind, workdir)?
+        .into_iter()
+        .find(|worktree| worktree.is_main)
+        .map(|worktree| worktree.path)
+        .ok_or_else(|| anyhow!("No main {} worktree found", kind.name()))
+}
+
+/// Find a worktree by handle/label first, then by its displayed reference.
+pub fn find_worktree_in(kind: VcsKind, name: &str, workdir: &Path) -> Result<Worktree> {
+    let worktrees = list_worktrees_in(kind, workdir)?;
+    worktrees
+        .iter()
+        .find(|worktree| worktree.handle() == name)
+        .or_else(|| worktrees.iter().find(|worktree| worktree.reference == name))
+        .cloned()
+        .ok_or_else(|| crate::git::WorktreeNotFound(name.to_string()).into())
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
 }
