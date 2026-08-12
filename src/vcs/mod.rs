@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod metadata;
 mod sapling;
+
+pub use metadata::WorktreeMetadataStore;
 
 /// Version-control implementation backing the current repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
