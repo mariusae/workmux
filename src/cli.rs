@@ -31,22 +31,12 @@ macro_rules! impl_passthrough_typed_value_parser {
     };
 }
 
-fn try_list_worktrees() -> Option<Vec<(PathBuf, String)>> {
+fn try_list_worktrees() -> Option<(vcs::VcsKind, Vec<vcs::Worktree>)> {
     let cwd = std::env::current_dir().ok()?;
     let kind = vcs::detect_in(&cwd).ok()?;
-    vcs::list_worktrees_in(kind, &cwd).ok().map(|worktrees| {
-        worktrees
-            .into_iter()
-            .map(|worktree| {
-                let reference = if kind == vcs::VcsKind::Sapling {
-                    worktree.handle()
-                } else {
-                    worktree.reference
-                };
-                (worktree.path, reference)
-            })
-            .collect()
-    })
+    vcs::list_worktrees_in(kind, &cwd)
+        .ok()
+        .map(|worktrees| (kind, worktrees))
 }
 
 #[derive(Clone, Debug)]
@@ -58,20 +48,20 @@ impl WorktreeBranchParser {
     }
 
     fn get_branches(&self) -> Vec<String> {
-        let Some(worktrees) = try_list_worktrees() else {
+        let Some((kind, worktrees)) = try_list_worktrees() else {
             return Vec::new();
         };
 
-        let main_branch = vcs::detect()
-            .ok()
-            .filter(|kind| *kind == vcs::VcsKind::Git)
-            .and_then(|_| git::get_default_branch().ok());
-
         worktrees
             .into_iter()
-            .map(|(_, branch)| branch)
-            // Filter out the main branch, as it's not a candidate for merging/removing.
-            .filter(|branch| main_branch.as_deref() != Some(branch.as_str()))
+            .filter(|worktree| !worktree.is_main)
+            .map(|worktree| {
+                if kind == vcs::VcsKind::Sapling {
+                    worktree.handle()
+                } else {
+                    worktree.reference
+                }
+            })
             // Filter out detached HEAD states.
             .filter(|branch| branch != "(detached)")
             .collect()
@@ -89,28 +79,28 @@ impl WorktreeHandleParser {
         Self
     }
 
-    fn get_handles() -> Vec<String> {
-        let Some(worktrees) = try_list_worktrees() else {
+    fn collect_handles(include_main: bool) -> Vec<String> {
+        let Some((_, worktrees)) = try_list_worktrees() else {
             return Vec::new();
         };
 
-        let main_worktree_root = std::env::current_dir().ok().and_then(|cwd| {
-            let kind = vcs::detect_in(&cwd).ok()?;
-            vcs::main_worktree_root_in(kind, &cwd).ok()
-        });
+        Self::handles_from_worktrees(worktrees, include_main)
+    }
 
+    fn handles_from_worktrees(worktrees: Vec<vcs::Worktree>, include_main: bool) -> Vec<String> {
         worktrees
             .into_iter()
-            .filter_map(|(path, _)| {
-                // Filter out the main worktree
-                if main_worktree_root.as_ref() == Some(&path) {
-                    return None;
-                }
-                // Extract directory name as the handle
-                path.file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-            })
+            .filter(|worktree| include_main || !worktree.is_main)
+            .map(|worktree| worktree.handle())
             .collect()
+    }
+
+    fn get_handles() -> Vec<String> {
+        Self::collect_handles(false)
+    }
+
+    fn get_all_handles() -> Vec<String> {
+        Self::collect_handles(true)
     }
 }
 
@@ -130,19 +120,7 @@ impl AgentTargetParser {
 
     fn get_targets() -> Vec<String> {
         // Start with local worktree handles
-        let mut targets = WorktreeHandleParser::get_handles();
-
-        // Also include the main worktree handle (agents can run there too)
-        if let Ok(cwd) = std::env::current_dir()
-            && let Ok(kind) = vcs::detect_in(&cwd)
-            && let Ok(main_root) = vcs::main_worktree_root_in(kind, &cwd)
-            && let Some(name) = main_root.file_name()
-        {
-            let handle = name.to_string_lossy().to_string();
-            if !targets.contains(&handle) {
-                targets.push(handle);
-            }
-        }
+        let mut targets = WorktreeHandleParser::get_all_handles();
 
         // Append global agent handles from reconciled state
         let mux = crate::multiplexer::create_backend(crate::multiplexer::detect_backend());
@@ -222,6 +200,7 @@ Monitoring:
   dashboard    Show a TUI dashboard of all active workmux agents
   sidebar      Toggle a live agent status sidebar in tmux
   list         List all worktrees [ls]
+  cd           Change directory to a worktree
   path         Get the filesystem path of a worktree
   status       Query agent status for worktrees
 
@@ -527,6 +506,13 @@ enum Commands {
         name: String,
     },
 
+    /// Change directory to a worktree (requires shell integration from `workmux completions`)
+    Cd {
+        /// Worktree name or Sapling label
+        #[arg(value_parser = WorktreeHandleParser::new())]
+        name: String,
+    },
+
     /// Send a prompt or instruction to a running agent
     Send {
         /// Worktree name (supports cross-project with project:handle syntax)
@@ -798,6 +784,10 @@ enum Commands {
     #[command(hide = true, name = "_complete-handles")]
     CompleteHandles,
 
+    /// Output all worktree handles, including the main checkout, for shell completion
+    #[command(hide = true, name = "_complete-worktrees")]
+    CompleteWorktrees,
+
     /// Output git branches for shell completion (internal use)
     #[command(hide = true, name = "_complete-git-branches")]
     CompleteGitBranches,
@@ -1050,6 +1040,10 @@ pub fn run() -> Result<()> {
         Commands::Rename { names, branch } => command::rename::run(names, branch),
         Commands::List { pr, json, filter } => command::list::run(pr, json, &filter),
         Commands::Path { name } => command::path::run(&name),
+        // A process cannot change its parent's working directory. The shell
+        // wrapper emitted by `workmux completions` captures this path and calls
+        // the shell's `cd` builtin.
+        Commands::Cd { name } => command::path::run(&name),
         Commands::Send { name, text, file } => {
             command::send::run(&name, text.as_deref(), file.as_deref())
         }
@@ -1151,6 +1145,12 @@ pub fn run() -> Result<()> {
         }
         Commands::CompleteHandles => {
             for handle in WorktreeHandleParser::get_handles() {
+                println!("{handle}");
+            }
+            Ok(())
+        }
+        Commands::CompleteWorktrees => {
+            for handle in WorktreeHandleParser::get_all_handles() {
                 println!("{handle}");
             }
             Ok(())
@@ -1316,6 +1316,43 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn cd_command_parses_worktree_name() {
+        let cli = Cli::try_parse_from(["workmux", "cd", "my-task"]).unwrap();
+
+        match cli.command {
+            Commands::Cd { name } => assert_eq!(name, "my-task"),
+            _ => panic!("expected cd command"),
+        }
+    }
+
+    #[test]
+    fn worktree_completion_uses_sapling_labels_and_can_include_main() {
+        let worktrees = vec![
+            vcs::Worktree {
+                path: PathBuf::from("/data/users/tester/fbsource"),
+                reference: "(detached)".to_string(),
+                label: None,
+                is_main: true,
+            },
+            vcs::Worktree {
+                path: PathBuf::from("/data/users/tester/fbsource-my-task"),
+                reference: "my-task".to_string(),
+                label: Some("my-task".to_string()),
+                is_main: false,
+            },
+        ];
+
+        assert_eq!(
+            WorktreeHandleParser::handles_from_worktrees(worktrees.clone(), false),
+            vec!["my-task"]
+        );
+        assert_eq!(
+            WorktreeHandleParser::handles_from_worktrees(worktrees, true),
+            vec!["fbsource", "my-task"]
+        );
     }
 
     #[test]
@@ -1540,6 +1577,10 @@ mod tests {
 
         // Dynamic wrapper registered
         assert!(output.contains("complete -F _workmux_dynamic"));
+        assert!(output.contains("_workmux_worktrees"));
+        assert!(output.contains("workmux()"));
+        assert!(output.contains("destination=\"$(command workmux \"$@\")\""));
+        assert!(output.contains("builtin cd -- \"$destination\""));
     }
 
     #[test]
@@ -1558,6 +1599,19 @@ mod tests {
 
         // Dynamic completions registered
         assert!(output.contains("__workmux_handles"));
+        assert!(output.contains("__workmux_worktrees"));
         assert!(output.contains("__workmux_git_branches"));
+        assert!(output.contains("function workmux"));
+        assert!(output.contains("set -l destination (command workmux $argv)"));
+        assert!(output.contains("builtin cd -- \"$destination\""));
+    }
+
+    #[test]
+    fn zsh_output_defines_cd_wrapper_and_completion() {
+        let output = generate_full_zsh_completions();
+        assert!(output.contains("_workmux_worktrees"));
+        assert!(output.contains("workmux()"));
+        assert!(output.contains("destination=\"$(command workmux \"$@\")\""));
+        assert!(output.contains("builtin cd -- \"$destination\""));
     }
 }

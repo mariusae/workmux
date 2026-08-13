@@ -1,18 +1,23 @@
 # Dynamic worktree handle completion (directory names)
 # Used for open/remove/merge/path/close - repo-scoped lifecycle commands
 _workmux_handles() {
-    workmux _complete-handles 2>/dev/null
+    command workmux _complete-handles 2>/dev/null
+}
+
+# All worktrees, including the main checkout, for navigation commands
+_workmux_worktrees() {
+    command workmux _complete-worktrees 2>/dev/null
 }
 
 # Dynamic agent target completion (local handles + cross-project agents)
 # Used for send/capture/status/wait/run - agent communication commands
 _workmux_agent_targets() {
-    workmux _complete-agent-targets 2>/dev/null
+    command workmux _complete-agent-targets 2>/dev/null
 }
 
 # Dynamic git branch completion for add command
 _workmux_git_branches() {
-    workmux _complete-git-branches 2>/dev/null
+    command workmux _complete-git-branches 2>/dev/null
 }
 
 # Wrapper that adds dynamic completion
@@ -53,6 +58,12 @@ _workmux_dynamic() {
                     return
                 fi
                 ;;
+            cd)
+                if [[ "$cur" != -* ]]; then
+                    COMPREPLY=($(compgen -W "$(_workmux_worktrees)" -- "$cur"))
+                    return
+                fi
+                ;;
             send|capture|status|wait|run)
                 # Positional arg: agent targets (local + cross-project)
                 if [[ "$cur" != -* ]]; then
@@ -87,3 +98,23 @@ _workmux_dynamic() {
 }
 
 complete -F _workmux_dynamic -o bashdefault -o default workmux
+
+# A child process cannot change Bash's working directory. Intercept `workmux cd`,
+# ask the binary to resolve the destination, then invoke Bash's cd builtin.
+workmux() {
+    if [[ ${1-} == cd ]]; then
+        local destination command_status
+        destination="$(command workmux "$@")"
+        command_status=$?
+        if (( command_status != 0 )); then
+            return "$command_status"
+        fi
+        if [[ -z $destination || $destination == *$'\n'* ]]; then
+            printf '%s\n' 'workmux cd: expected exactly one destination path' >&2
+            return 1
+        fi
+        builtin cd -- "$destination"
+    else
+        command workmux "$@"
+    fi
+}

@@ -2,8 +2,16 @@
 # Used for open/remove/merge/path/close - repo-scoped lifecycle commands
 _workmux_handles() {
     local -a handles
-    handles=("${(@f)$(workmux _complete-handles 2>/dev/null)}")
+    handles=("${(@f)$(command workmux _complete-handles 2>/dev/null)}")
     # "${(@f)...}" on empty output produces a single empty string; filter it out
+    handles=(${handles:#})
+    (( ${#handles} )) && compadd -a handles
+}
+
+# All worktrees, including the main checkout, for navigation commands
+_workmux_worktrees() {
+    local -a handles
+    handles=("${(@f)$(command workmux _complete-worktrees 2>/dev/null)}")
     handles=(${handles:#})
     (( ${#handles} )) && compadd -a handles
 }
@@ -12,7 +20,7 @@ _workmux_handles() {
 # Used for send/capture/status/wait/run - agent communication commands
 _workmux_agent_targets() {
     local -a targets
-    targets=("${(@f)$(workmux _complete-agent-targets 2>/dev/null)}")
+    targets=("${(@f)$(command workmux _complete-agent-targets 2>/dev/null)}")
     targets=(${targets:#})
     (( ${#targets} )) && compadd -a targets
 }
@@ -20,7 +28,7 @@ _workmux_agent_targets() {
 # Dynamic git branch completion for add command
 _workmux_git_branches() {
     local -a branches
-    branches=("${(@f)$(workmux _complete-git-branches 2>/dev/null)}")
+    branches=("${(@f)$(command workmux _complete-git-branches 2>/dev/null)}")
     branches=(${branches:#})
     (( ${#branches} )) && compadd -a branches
 }
@@ -94,6 +102,9 @@ _workmux() {
         open|remove|rm|rename|path|merge|rebase|close)
             _workmux_handles
             ;;
+        cd)
+            _workmux_worktrees
+            ;;
         send|capture|status|wait|run)
             _workmux_agent_targets
             ;;
@@ -118,3 +129,19 @@ if [ "$funcstack[1]" = "_workmux" ]; then
 else
     compdef _workmux workmux
 fi
+
+# A child process cannot change Zsh's working directory. Intercept `workmux cd`,
+# ask the binary to resolve the destination, then invoke Zsh's cd builtin.
+workmux() {
+    if [[ ${1-} == cd ]]; then
+        local destination
+        destination="$(command workmux "$@")" || return $?
+        if [[ -z $destination || $destination == *$'\n'* ]]; then
+            print -u2 'workmux cd: expected exactly one destination path'
+            return 1
+        fi
+        builtin cd -- "$destination"
+    else
+        command workmux "$@"
+    fi
+}
