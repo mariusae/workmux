@@ -170,6 +170,7 @@ export default defineConfig({
             { label: "close", slug: "reference/commands/close" },
             { label: "resurrect", slug: "reference/commands/resurrect" },
             { label: "sync-files", slug: "reference/commands/sync-files" },
+            { label: "cd", slug: "reference/commands/cd" },
             { label: "path", slug: "reference/commands/path" },
             { label: "dashboard", slug: "reference/commands/dashboard" },
             { label: "sidebar", slug: "reference/commands/sidebar" },

@@ -65,7 +65,7 @@ Add this to your `.bashrc`, `.zshrc`, or equivalent shell configuration file.
 
 ## Shell completions
 
-To enable tab completions for commands and branch names, add the following to your shell's configuration file.
+To enable tab completions and the shell-level `workmux cd` command, add the following to your shell's configuration file. The generated initialization defines a `workmux` function that delegates normal commands to the binary and uses the shell's `cd` builtin for `workmux cd`.
 
 <Tabs syncKey="shell">
   <TabItem label="Bash">

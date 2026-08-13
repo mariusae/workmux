@@ -18,6 +18,7 @@ description: Complete reference for all workmux commands
 | [`close`](/reference/commands/close/)             | Close a worktree's tmux window (keeps worktree)     |
 | [`resurrect`](/reference/commands/resurrect/)     | Restore worktree windows after a crash              |
 | [`sync-files`](/reference/commands/sync-files/)   | Re-apply file operations to existing worktrees      |
+| [`cd`](/reference/commands/cd/)                   | Change directory to a worktree                      |
 | [`path`](/reference/commands/path/)               | Get the filesystem path of a worktree               |
 | [`dashboard`](/reference/commands/dashboard/)     | TUI dashboard for monitoring agents                 |
 | [`sidebar`](/reference/commands/sidebar/)         | Live agent status sidebar in tmux                   |

@@ -560,6 +560,7 @@ alias wm='workmux'
 - [`close`](#workmux-close-name) - Close a worktree's tmux window (keeps
   worktree)
 - [`resurrect`](#workmux-resurrect) - Restore worktree windows after a crash
+- [`cd`](#workmux-cd-name) - Change directory to a worktree
 - [`path`](#workmux-path-name) - Get the filesystem path of a worktree
 - [`dashboard`](#workmux-dashboard) - Show TUI dashboard of all active agents
 - [`sidebar`](#workmux-sidebar) - Toggle a compact agent status sidebar in tmux
@@ -1606,6 +1607,21 @@ workmux sync-files --all
 
 ---
 
+### `workmux cd <name>`
+
+Changes the current shell's directory to an existing worktree. The main
+checkout and linked worktrees are both supported.
+
+This command requires shell integration from `workmux completions`; a child
+process cannot change its parent shell's working directory. See
+[Shell completions](#shell-completions) for setup.
+
+```bash
+workmux cd user-auth
+```
+
+---
+
 ### `workmux path <name>`
 
 Prints the filesystem path of an existing worktree. Useful for scripting or
@@ -1620,7 +1636,7 @@ quickly navigating to a worktree directory.
 workmux path user-auth
 # Output: /Users/you/project__worktrees/user-auth
 
-# Use in scripts or with cd
+# Navigate without shell integration
 cd "$(workmux path user-auth)"
 
 # Copy a file to a worktree
@@ -2718,8 +2734,10 @@ including `/merge`, `/rebase`, `/coordinator`, and `/open-pr`.
 
 ## Shell completions
 
-To enable tab completions for commands and branch names, add the following to
-your shell's configuration file.
+To enable tab completions and the shell-level `workmux cd` command, add the
+following to your shell's configuration file. The generated initialization
+defines a `workmux` function that delegates normal commands to the binary and
+uses the shell's `cd` builtin for `workmux cd`.
 
 For **bash**, add to your `.bashrc`:
 
