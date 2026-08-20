@@ -130,7 +130,34 @@ fn list_worktrees_with_program(program: &Path, workdir: &Path) -> Result<Vec<Wor
         ));
     }
 
-    parse_worktree_list_json(&String::from_utf8(output.stdout)?)
+    let mut worktrees = parse_worktree_list_json(&String::from_utf8(output.stdout)?)?;
+
+    // Before the first linked worktree is added, Sapling reports a successful
+    // but empty worktree list (and prints "this worktree is not part of a
+    // group" in the human-readable format). Treat the current checkout as the
+    // main worktree so `workmux add` can create and initialize the group.
+    if worktrees.is_empty() {
+        let output = Command::new(program)
+            .arg("root")
+            .current_dir(workdir)
+            .output()
+            .context("Failed to execute 'sl root'")?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Failed to find Sapling repository root: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        worktrees.push(Worktree {
+            path: PathBuf::from(String::from_utf8(output.stdout)?.trim()),
+            reference: ".".to_string(),
+            label: None,
+            is_main: true,
+        });
+    }
+
+    Ok(worktrees)
 }
 
 fn string_field<'a>(value: &'a Value, names: &[&str]) -> Option<&'a str> {
@@ -213,6 +240,32 @@ mod tests {
 
         assert!(worktrees[0].is_main);
         assert_eq!(worktrees[1].handle(), "a");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn treats_ungrouped_checkout_as_main_worktree() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let program = temp.path().join("sl");
+        let script = "#!/bin/sh\n\
+                      if [ \"$*\" = 'worktree list -Tjson' ]; then\n\
+                        printf '%s\\n' '[]'\n\
+                      elif [ \"$*\" = 'root' ]; then\n\
+                        printf '%s\\n' '/repo/main'\n\
+                      fi\n";
+        std::fs::write(&program, script).unwrap();
+        let mut permissions = std::fs::metadata(&program).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&program, permissions).unwrap();
+
+        let worktrees = list_worktrees_with_program(&program, temp.path()).unwrap();
+
+        assert_eq!(worktrees.len(), 1);
+        assert_eq!(worktrees[0].path, Path::new("/repo/main"));
+        assert_eq!(worktrees[0].reference, ".");
+        assert!(worktrees[0].is_main);
     }
 
     #[cfg(unix)]
