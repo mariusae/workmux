@@ -37,7 +37,7 @@ pub mod wait;
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::{config::Config, workflow::SetupOptions};
+use crate::{config::Config, vcs, workflow::SetupOptions};
 
 /// Represents the different phases where hooks can be executed
 pub enum HookPhase {
@@ -92,15 +92,43 @@ pub fn resolve_name(arg: Option<&str>) -> Result<String> {
     }
 }
 
-/// Internal function to resolve worktree name from a path.
-/// Separated for testability.
+fn paths_equal(left: &std::path::Path, right: &std::path::Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+fn registered_worktree_handle(
+    root: &std::path::Path,
+    worktrees: &[vcs::Worktree],
+) -> Option<String> {
+    worktrees
+        .iter()
+        .find(|worktree| paths_equal(&worktree.path, root))
+        .map(vcs::Worktree::handle)
+}
+
+/// Resolve a worktree name from a path.
 ///
-/// Uses `Path::components()` for cross-platform compatibility.
-/// If the path is inside a worktree (even a subdirectory), extracts the worktree name.
-///
-/// Iterates in reverse to find the *closest* `__worktrees` parent, handling nested
-/// structures correctly (e.g., `/backup__worktrees/project__worktrees/feature/src/`).
+/// Prefer the backend's registered identity. Sapling worktree labels can differ
+/// from their EdenFS mount directory names, so the basename is not authoritative.
+/// Retain the legacy path convention as a fallback when repository metadata is
+/// unavailable, such as inside some sandbox guests.
 fn resolve_name_from_path(path: &std::path::Path) -> Result<String> {
+    if let Ok(kind) = vcs::detect_in(path)
+        && let Ok(root) = vcs::repo_root_in(kind, path)
+        && let Ok(worktrees) = vcs::list_worktrees_in(kind, path)
+        && let Some(handle) = registered_worktree_handle(&root, &worktrees)
+    {
+        return Ok(handle);
+    }
+
+    resolve_name_from_path_fallback(path)
+}
+
+/// Infer legacy Git-style handles from the directory layout.
+fn resolve_name_from_path_fallback(path: &std::path::Path) -> Result<String> {
     let mut iter = path.components().rev();
     let mut child_name: Option<String> = iter
         .next()
@@ -201,5 +229,42 @@ mod tests {
         .iter()
         .collect();
         assert_eq!(resolve_name_from_path(&path).unwrap(), "feature");
+    }
+
+    #[test]
+    fn registered_sapling_worktree_uses_label_instead_of_mount_basename() {
+        let root = PathBuf::from("/data/users/tester/fbsource-2026-08-13-chrysalis");
+        let worktrees = vec![vcs::Worktree {
+            path: root.clone(),
+            reference: "2026-08-13-chrysalis".to_string(),
+            label: Some("2026-08-13-chrysalis".to_string()),
+            is_main: false,
+        }];
+
+        assert_eq!(
+            registered_worktree_handle(&root, &worktrees).as_deref(),
+            Some("2026-08-13-chrysalis")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registered_worktree_matching_resolves_symlinked_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let physical = temp.path().join("physical");
+        let alias = temp.path().join("alias");
+        std::fs::create_dir(&physical).unwrap();
+        std::os::unix::fs::symlink(&physical, &alias).unwrap();
+        let worktrees = vec![vcs::Worktree {
+            path: physical,
+            reference: "task".to_string(),
+            label: Some("task".to_string()),
+            is_main: false,
+        }];
+
+        assert_eq!(
+            registered_worktree_handle(&alias, &worktrees).as_deref(),
+            Some("task")
+        );
     }
 }
