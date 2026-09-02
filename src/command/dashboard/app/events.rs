@@ -48,9 +48,9 @@ impl App {
                     self.last_pr_fetch = std::time::Instant::now() - super::PR_FETCH_INTERVAL;
                 }
             }
-            AppEvent::WorktreeLog(path, log) => {
+            AppEvent::WorktreeHistory(path, history) => {
                 if self.worktree_preview_path.as_ref() == Some(&path) {
-                    self.worktree_preview = Some(log);
+                    self.worktree_preview = Some(history);
                 }
             }
             AppEvent::AddWorktreeResult(result) => {

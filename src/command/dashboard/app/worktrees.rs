@@ -10,12 +10,66 @@ use anyhow::Context as _;
 
 use crate::git;
 use crate::multiplexer::Multiplexer;
-use crate::workflow;
+use crate::{vcs, workflow};
 
 use super::super::agent;
 use super::super::sort::WorktreeSortMode;
 use super::App;
 use super::types::*;
+
+const SAPLING_STACK_REVSET: &str = "draft() & ((::.) + (.::))";
+
+fn worktree_history_command(kind: vcs::VcsKind) -> (&'static str, Vec<&'static str>) {
+    match kind {
+        vcs::VcsKind::Git => ("git", vec!["log", "--format=%h\t%ar\t%s", "-n", "20"]),
+        vcs::VcsKind::Sapling => (
+            "sl",
+            vec![
+                "--color=never",
+                "--pager=off",
+                "sl",
+                "-r",
+                SAPLING_STACK_REVSET,
+            ],
+        ),
+    }
+}
+
+fn load_worktree_history(path: &Path) -> WorktreeHistory {
+    let kind = match vcs::detect_in(path) {
+        Ok(kind) => kind,
+        Err(error) => {
+            return WorktreeHistory {
+                vcs_kind: None,
+                content: Err(format!("Failed to detect repository backend: {error}")),
+            };
+        }
+    };
+    let (program, args) = worktree_history_command(kind);
+    let content = match std::process::Command::new(program)
+        .args(args)
+        .current_dir(path)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+        Ok(output) => {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(if message.is_empty() {
+                format!("{program} history command exited with {}", output.status)
+            } else {
+                message
+            })
+        }
+        Err(error) => Err(format!("Failed to execute {program}: {error}")),
+    };
+
+    WorktreeHistory {
+        vcs_kind: Some(kind),
+        content,
+    }
+}
 
 /// Delete the last word from a string (Emacs Ctrl+w behavior).
 fn delete_word_backward(s: &mut String) {
@@ -1319,7 +1373,7 @@ impl App {
         }
     }
 
-    /// Update the preview for the selected worktree (git log)
+    /// Update the backend-specific history preview for the selected worktree.
     fn update_worktree_preview(&mut self) {
         let current_path = self
             .worktree_table_state
@@ -1334,16 +1388,40 @@ impl App {
             if let Some(path) = current_path {
                 let tx = self.event_tx.clone();
                 std::thread::spawn(move || {
-                    let output = std::process::Command::new("git")
-                        .args(["log", "--format=%h\t%ar\t%s", "-n", "20"])
-                        .current_dir(&path)
-                        .output();
-                    if let Ok(out) = output {
-                        let log = String::from_utf8_lossy(&out.stdout).to_string();
-                        let _ = tx.send(AppEvent::WorktreeLog(path, log));
-                    }
+                    let history = load_worktree_history(&path);
+                    let _ = tx.send(AppEvent::WorktreeHistory(path, history));
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_history_command_is_unchanged() {
+        assert_eq!(
+            worktree_history_command(vcs::VcsKind::Git),
+            ("git", vec!["log", "--format=%h\t%ar\t%s", "-n", "20"])
+        );
+    }
+
+    #[test]
+    fn sapling_history_uses_slr_smartlog_revset() {
+        assert_eq!(
+            worktree_history_command(vcs::VcsKind::Sapling),
+            (
+                "sl",
+                vec![
+                    "--color=never",
+                    "--pager=off",
+                    "sl",
+                    "-r",
+                    "draft() & ((::.) + (.::))",
+                ]
+            )
+        );
     }
 }

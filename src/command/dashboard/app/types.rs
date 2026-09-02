@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use crate::git::GitStatus;
 use crate::github::{BranchSummary, PrListEntry};
+use crate::vcs::VcsKind;
 use crate::workflow::types::WorktreeInfo;
 
 use super::super::diff::DiffView;
@@ -21,8 +22,8 @@ pub enum AppEvent {
     GithubStatus(PathBuf, HashMap<String, BranchSummary>),
     /// Full worktree list from background fetch
     WorktreeList(Vec<WorktreeInfo>),
-    /// Git log preview for a worktree path
-    WorktreeLog(PathBuf, String),
+    /// Commit history preview for a worktree path
+    WorktreeHistory(PathBuf, WorktreeHistory),
     /// Result of a background add-worktree operation
     AddWorktreeResult(Result<String, String>),
     /// Result of fetching open PRs for the add-worktree modal
@@ -31,6 +32,13 @@ pub enum AppEvent {
     SweepProgressUpdate(usize, usize, String),
     /// Sweep operation completed
     SweepComplete(Result<(), String>),
+}
+
+/// Backend-specific history shown beside the selected worktree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeHistory {
+    pub vcs_kind: Option<VcsKind>,
+    pub content: Result<String, String>,
 }
 
 use clap::ValueEnum;

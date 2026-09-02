@@ -148,8 +148,8 @@ pub struct App {
     is_worktree_fetching: Arc<AtomicBool>,
     /// Last time worktree list was fetched
     last_worktree_fetch: std::time::Instant,
-    /// Cached git log preview for selected worktree
-    pub worktree_preview: Option<String>,
+    /// Cached backend-specific history for the selected worktree
+    pub worktree_preview: Option<WorktreeHistory>,
     /// Path of the worktree whose preview is cached
     worktree_preview_path: Option<PathBuf>,
     /// Temporary status message shown in the footer (auto-clears after timeout)

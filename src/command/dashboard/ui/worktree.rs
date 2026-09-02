@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use super::super::agent;
-use super::super::app::App;
+use super::super::app::{App, WorktreeHistory};
 use super::format;
 use super::format::{
     AgentStatusFormat, format_agent_status_summary, format_git_status, format_pr_status, truncate,
@@ -246,22 +246,22 @@ pub fn render_worktree_table(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(table, area, &mut app.worktree_table_state);
 }
 
-/// Render the worktree preview: info panel (left) + styled git log (right).
+/// Render the worktree preview: info panel (left) + repository history (right).
 pub fn render_worktree_preview(f: &mut Frame, app: &mut App, area: Rect) {
     let selected_worktree = app
         .worktree_table_state
         .selected()
         .and_then(|idx| app.worktrees.get(idx));
 
-    // Split preview area into info panel (left) and git log (right)
+    // Split preview area into info panel (left) and history (right)
     let chunks = Layout::horizontal([
         Constraint::Length(40), // Info panel: fixed width
-        Constraint::Fill(1),    // Git log: remaining space
+        Constraint::Fill(1),    // Repository history: remaining space
     ])
     .split(area);
 
     render_info_panel(f, app, chunks[0], selected_worktree);
-    render_git_log(f, app, chunks[1], selected_worktree);
+    render_worktree_history(f, app, chunks[1], selected_worktree);
 }
 
 /// Render the info panel showing worktree metadata.
@@ -290,9 +290,20 @@ fn render_info_panel(
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Branch
+    let identity_label = if app
+        .worktree_preview
+        .as_ref()
+        .and_then(|preview| preview.vcs_kind)
+        == Some(crate::vcs::VcsKind::Sapling)
+    {
+        "Label   "
+    } else {
+        "Branch  "
+    };
+
+    // Branch or Sapling worktree label
     lines.push(Line::from(vec![
-        Span::styled("Branch  ", label_style),
+        Span::styled(identity_label, label_style),
         Span::styled(&wt.branch, text_style),
     ]));
 
@@ -486,46 +497,93 @@ fn render_info_panel(
     f.render_widget(paragraph, area);
 }
 
-/// Render the styled git log panel.
-fn render_git_log(
+fn history_panel_title(history: Option<&WorktreeHistory>) -> &'static str {
+    match history.and_then(|history| history.vcs_kind) {
+        Some(crate::vcs::VcsKind::Sapling) => " Sapling Stack ",
+        Some(crate::vcs::VcsKind::Git) => " Git Log ",
+        None => " History ",
+    }
+}
+
+/// Render the selected worktree's Git log or Sapling smartlog.
+fn render_worktree_history(
     f: &mut Frame,
     app: &App,
     area: Rect,
     worktree: Option<&crate::workflow::types::WorktreeInfo>,
 ) {
-    let block = format::panel_block(" Git Log ", &app.palette);
+    let block = format::panel_block(
+        history_panel_title(app.worktree_preview.as_ref()),
+        &app.palette,
+    );
 
     let text = match (&app.worktree_preview, worktree) {
-        (Some(log), Some(_)) if !log.trim().is_empty() => {
-            let hash_style = Style::default().fg(app.palette.accent);
-            let date_style = Style::default().fg(app.palette.dimmed);
-            let msg_style = Style::default().fg(app.palette.text);
+        (Some(history), Some(_)) => match &history.content {
+            Err(error) => Text::from(Line::styled(error, Style::default().fg(app.palette.danger))),
+            Ok(log) if log.trim().is_empty() => {
+                let empty = if history.vcs_kind == Some(crate::vcs::VcsKind::Sapling) {
+                    "(no draft stack)"
+                } else {
+                    "(no commits)"
+                };
+                Text::raw(empty)
+            }
+            Ok(log) if history.vcs_kind == Some(crate::vcs::VcsKind::Sapling) => Text::from(
+                log.lines()
+                    .map(|line| Line::styled(line, Style::default().fg(app.palette.text)))
+                    .collect::<Vec<_>>(),
+            ),
+            Ok(log) => {
+                let hash_style = Style::default().fg(app.palette.accent);
+                let date_style = Style::default().fg(app.palette.dimmed);
+                let msg_style = Style::default().fg(app.palette.text);
 
-            let lines: Vec<Line> = log
-                .lines()
-                .map(|line| {
-                    let parts: Vec<&str> = line.splitn(3, '\t').collect();
-                    if parts.len() == 3 {
-                        Line::from(vec![
-                            Span::styled(parts[0], hash_style),
-                            Span::styled("  ", date_style),
-                            Span::styled(parts[1], date_style),
-                            Span::styled("  ", msg_style),
-                            Span::styled(parts[2], msg_style),
-                        ])
-                    } else {
-                        // Fallback for lines that don't match format
-                        Line::styled(line, msg_style)
-                    }
-                })
-                .collect();
-            Text::from(lines)
-        }
+                let lines: Vec<Line> = log
+                    .lines()
+                    .map(|line| {
+                        let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                        if parts.len() == 3 {
+                            Line::from(vec![
+                                Span::styled(parts[0], hash_style),
+                                Span::styled("  ", date_style),
+                                Span::styled(parts[1], date_style),
+                                Span::styled("  ", msg_style),
+                                Span::styled(parts[2], msg_style),
+                            ])
+                        } else {
+                            // Fallback for lines that don't match format
+                            Line::styled(line, msg_style)
+                        }
+                    })
+                    .collect();
+                Text::from(lines)
+            }
+        },
         (None, Some(_)) => Text::raw(""),
-        (Some(_), Some(_)) => Text::raw("(no commits)"),
         (_, None) => Text::raw(""),
     };
 
     let paragraph = Paragraph::new(text).block(block);
     f.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_title_tracks_repository_backend() {
+        let git = WorktreeHistory {
+            vcs_kind: Some(crate::vcs::VcsKind::Git),
+            content: Ok(String::new()),
+        };
+        let sapling = WorktreeHistory {
+            vcs_kind: Some(crate::vcs::VcsKind::Sapling),
+            content: Ok(String::new()),
+        };
+
+        assert_eq!(history_panel_title(Some(&git)), " Git Log ");
+        assert_eq!(history_panel_title(Some(&sapling)), " Sapling Stack ");
+        assert_eq!(history_panel_title(None), " History ");
+    }
 }
