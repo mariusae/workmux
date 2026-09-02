@@ -365,6 +365,13 @@ impl App {
         self.update_worktree_preview();
     }
 
+    /// Whether the selected worktree's history is still being loaded.
+    pub fn is_worktree_history_loading(&self) -> bool {
+        self.active_tab == DashboardTab::Worktrees
+            && self.worktree_table_state.selected().is_some()
+            && self.worktree_preview.is_none()
+    }
+
     pub fn worktree_next(&mut self) {
         if self.worktrees.is_empty() {
             return;

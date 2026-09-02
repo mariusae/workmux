@@ -65,6 +65,8 @@ use self::mouse::handle_mouse_event;
 use self::spinner::SPINNER_FRAME_COUNT;
 use self::ui::ui;
 
+const SHIMMER_FRAME_INTERVAL: Duration = Duration::from_millis(32);
+
 /// Determine the current keymap context based on app state.
 fn get_context(app: &App) -> Context {
     app.keymap_context()
@@ -213,7 +215,13 @@ pub fn run(
         let time_until_preview =
             current_preview_interval.saturating_sub(last_preview_refresh.elapsed());
         let time_until_tick = tick_rate.saturating_sub(last_tick.elapsed());
-        let timeout = time_until_tick.min(time_until_preview);
+        let timeout = if app.is_worktree_history_loading() {
+            time_until_tick
+                .min(time_until_preview)
+                .min(SHIMMER_FRAME_INTERVAL)
+        } else {
+            time_until_tick.min(time_until_preview)
+        };
 
         // Block until an event arrives OR the timeout fires
         match event_rx.recv_timeout(timeout) {

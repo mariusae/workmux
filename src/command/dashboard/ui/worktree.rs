@@ -3,10 +3,12 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::Style,
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Cell, Paragraph, Row, Table},
 };
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use super::super::agent;
 use super::super::app::{App, WorktreeHistory};
@@ -505,6 +507,79 @@ fn history_panel_title(history: Option<&WorktreeHistory>) -> &'static str {
     }
 }
 
+static SHIMMER_START: OnceLock<Instant> = OnceLock::new();
+
+fn shimmer_intensity(index: usize, length: usize, elapsed: Duration) -> f64 {
+    if length == 0 {
+        return 0.0;
+    }
+
+    let sweep = (length + 20) as f64;
+    let position = ((elapsed.as_secs_f64() % 2.0) / 2.0 * sweep).floor();
+    let distance = ((index + 10) as f64 - position).abs();
+    if distance > 5.0 {
+        0.0
+    } else {
+        0.5 * (1.0 + (std::f64::consts::PI * distance / 5.0).cos())
+    }
+}
+
+fn blend_rgb(from: Color, to: Color, amount: f64) -> Option<Color> {
+    let (Color::Rgb(fr, fg, fb), Color::Rgb(tr, tg, tb)) = (from, to) else {
+        return None;
+    };
+    let blend =
+        |a: u8, b: u8| (f64::from(a) * (1.0 - amount) + f64::from(b) * amount).floor() as u8;
+    Some(Color::Rgb(blend(fr, tr), blend(fg, tg), blend(fb, tb)))
+}
+
+fn shimmer_history_title_at(
+    elapsed: Duration,
+    palette: &super::theme::ThemePalette,
+) -> Line<'static> {
+    const TITLE: &str = "History";
+    let mut spans = Vec::with_capacity(TITLE.len() + 2);
+    spans.push(Span::raw(" "));
+
+    for (index, character) in TITLE.chars().enumerate() {
+        let intensity = shimmer_intensity(index, TITLE.chars().count(), elapsed);
+        let style = if let Some(color) = blend_rgb(palette.dimmed, palette.header, intensity * 0.9)
+        {
+            Style::default().fg(color).add_modifier(Modifier::BOLD)
+        } else if intensity < 0.2 {
+            Style::default()
+                .fg(palette.header)
+                .add_modifier(Modifier::DIM)
+                .remove_modifier(Modifier::BOLD)
+        } else if intensity < 0.6 {
+            Style::default()
+                .fg(palette.header)
+                .remove_modifier(Modifier::BOLD | Modifier::DIM)
+        } else {
+            Style::default()
+                .fg(palette.header)
+                .add_modifier(Modifier::BOLD)
+                .remove_modifier(Modifier::DIM)
+        };
+        spans.push(Span::styled(character.to_string(), style));
+    }
+
+    spans.push(Span::raw(" "));
+    Line::from(spans)
+}
+
+fn history_panel_title_line(
+    history: Option<&WorktreeHistory>,
+    palette: &super::theme::ThemePalette,
+) -> Line<'static> {
+    match history {
+        Some(history) => Line::from(history_panel_title(Some(history))),
+        None => {
+            shimmer_history_title_at(SHIMMER_START.get_or_init(Instant::now).elapsed(), palette)
+        }
+    }
+}
+
 /// Render the selected worktree's Git log or Sapling smartlog.
 fn render_worktree_history(
     f: &mut Frame,
@@ -512,10 +587,12 @@ fn render_worktree_history(
     area: Rect,
     worktree: Option<&crate::workflow::types::WorktreeInfo>,
 ) {
-    let block = format::panel_block(
-        history_panel_title(app.worktree_preview.as_ref()),
-        &app.palette,
-    );
+    let title = if worktree.is_some() {
+        history_panel_title_line(app.worktree_preview.as_ref(), &app.palette)
+    } else {
+        Line::from(history_panel_title(None))
+    };
+    let block = format::panel_block(title, &app.palette);
 
     let text = match (&app.worktree_preview, worktree) {
         (Some(history), Some(_)) => match &history.content {
@@ -585,5 +662,25 @@ mod tests {
         assert_eq!(history_panel_title(Some(&git)), " Git Log ");
         assert_eq!(history_panel_title(Some(&sapling)), " Sapling Stack ");
         assert_eq!(history_panel_title(None), " History ");
+    }
+
+    #[test]
+    fn shimmer_sweeps_across_history_title() {
+        assert_eq!(shimmer_intensity(0, 7, Duration::ZERO), 0.0);
+        assert_eq!(shimmer_intensity(3, 7, Duration::from_secs(1)), 1.0);
+        assert!(
+            shimmer_intensity(3, 7, Duration::from_secs(1))
+                > shimmer_intensity(6, 7, Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn shimmer_title_preserves_text() {
+        let palette = crate::ui::theme::ThemePalette::for_scheme(
+            crate::config::ThemeScheme::Default,
+            crate::config::ThemeMode::Dark,
+        );
+        let title = shimmer_history_title_at(Duration::from_secs(1), &palette);
+        assert_eq!(title.to_string(), " History ");
     }
 }
