@@ -4,6 +4,8 @@ description: Open a TUI dashboard showing all active AI agents
 ---
 
 Opens a TUI dashboard showing all active AI agents across all tmux sessions.
+On the Worktrees tab, the history preview shows `git log` for Git repositories
+and the native smartlog stack for Sapling repositories.
 
 ```bash
 workmux dashboard

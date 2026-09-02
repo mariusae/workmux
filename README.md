@@ -1649,6 +1649,8 @@ cp config.json "$(workmux path feature-branch)/"
 
 Opens a TUI dashboard showing all active AI agents across all tmux sessions.
 Useful for monitoring multiple parallel agents and quickly jumping between them.
+The Worktrees tab previews `git log` for Git worktrees and the native Sapling
+smartlog stack for Sapling worktrees.
 
 #### Options
 
