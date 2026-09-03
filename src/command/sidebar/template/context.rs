@@ -513,6 +513,13 @@ mod tests {
     }
 
     #[test]
+    fn cached_kind_renders_friendly_muse_label() {
+        let icons = ResolvedAgentIcons::default();
+        assert_eq!(resolve_agent_label(kind(None, Some("muse"))), "Muse");
+        assert_eq!(resolve_agent_icon(kind(None, Some("muse")), &icons), "M");
+    }
+
+    #[test]
     fn cached_kind_renders_friendly_opencode_label() {
         assert_eq!(
             resolve_agent_label(kind(Some("opencode"), None)),

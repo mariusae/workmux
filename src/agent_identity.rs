@@ -32,6 +32,7 @@ pub enum AgentKind {
     KiroCli,
     Vibe,
     Copilot,
+    Muse,
 }
 
 impl AgentKind {
@@ -49,6 +50,7 @@ impl AgentKind {
             AgentKind::KiroCli => "kiro-cli",
             AgentKind::Vibe => "vibe",
             AgentKind::Copilot => "copilot",
+            AgentKind::Muse => "muse",
         }
     }
 
@@ -65,6 +67,7 @@ impl AgentKind {
             "kiro-cli" => Some(AgentKind::KiroCli),
             "vibe" => Some(AgentKind::Vibe),
             "copilot" => Some(AgentKind::Copilot),
+            "muse" => Some(AgentKind::Muse),
             _ => None,
         }
     }
@@ -83,6 +86,7 @@ impl AgentKind {
             AgentKind::KiroCli => "K",
             AgentKind::Vibe => "V",
             AgentKind::Copilot => "CP",
+            AgentKind::Muse => "M",
         }
     }
 
@@ -100,6 +104,7 @@ impl AgentKind {
             AgentKind::KiroCli => "Kiro",
             AgentKind::Vibe => "Vibe",
             AgentKind::Copilot => "Copilot",
+            AgentKind::Muse => "Muse",
         }
     }
 
@@ -121,6 +126,7 @@ impl AgentKind {
             AgentKind::Omp => Color::Rgb(0xe0, 0x57, 0x35),
             AgentKind::OpenCode => Color::Blue,
             AgentKind::KiroCli => return None,
+            AgentKind::Muse => return None,
         })
     }
 }
@@ -271,6 +277,7 @@ mod tests {
         assert_eq!(classify("pi", ""), Some("pi".into()));
         assert_eq!(classify("omp", ""), Some("omp".into()));
         assert_eq!(classify("vibe", ""), Some("vibe".into()));
+        assert_eq!(classify("muse", ""), Some("muse".into()));
     }
 
     #[test]
@@ -384,6 +391,7 @@ mod tests {
             AgentKind::KiroCli,
             AgentKind::Vibe,
             AgentKind::Copilot,
+            AgentKind::Muse,
         ];
         for kind in all {
             assert!(!kind.default_icon().is_empty(), "{:?} icon empty", kind);

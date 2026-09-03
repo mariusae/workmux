@@ -179,6 +179,7 @@ Default icons:
 - `kiro-cli` → `K`
 - `vibe` → `V`
 - `copilot` → `CP`
+- `muse` → `M`
 
 Unknown agents render an empty icon.
 

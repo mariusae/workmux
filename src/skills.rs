@@ -74,6 +74,9 @@ fn skills_dir_with_env(
         Agent::Omp => {
             Some(crate::agent_setup::omp::omp_agent_dir_with_env(home, get_env).join("skills"))
         }
+        Agent::Muse => {
+            Some(crate::agent_setup::muse::muse_config_dir_with_env(home, get_env).join("skills"))
+        }
         Agent::Antigravity | Agent::Codex | Agent::Copilot | Agent::Gemini => None,
     }
 }
@@ -385,6 +388,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(dir, PathBuf::from("/tmp/omp-agent/skills"));
+    }
+
+    #[test]
+    fn test_skills_dir_muse() {
+        let dir = skills_dir_with_env(Agent::Muse, Path::new("/home/test"), |_| None).unwrap();
+
+        assert_eq!(dir, PathBuf::from("/home/test/.config/muse/skills"));
+    }
+
+    #[test]
+    fn test_skills_dir_muse_respects_xdg_config_home() {
+        let dir = skills_dir_with_env(Agent::Muse, Path::new("/home/test"), |key| {
+            (key == "XDG_CONFIG_HOME").then(|| OsString::from("/tmp/xdg"))
+        })
+        .unwrap();
+
+        assert_eq!(dir, PathBuf::from("/tmp/xdg/muse/skills"));
     }
 
     #[test]

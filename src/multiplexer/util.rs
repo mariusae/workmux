@@ -648,6 +648,27 @@ mod tests {
     }
 
     #[test]
+    fn resolve_structured_pane_command_injects_muse_prompt_positional() {
+        let prompt = PathBuf::from("/tmp/worktree/PROMPT.md");
+        let working_dir = PathBuf::from("/tmp/worktree");
+        let config = config_with_agent("muse");
+        let resolved = resolve_pane_command_with_config(
+            Some("muse"),
+            true,
+            Some(&prompt),
+            &working_dir,
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+
+        assert!(resolved.prompt_injected);
+        assert!(resolved.command.contains("PROMPT.md"));
+        assert_eq!(resolved.selected_agent.unwrap().kind(), "muse");
+    }
+
+    #[test]
     fn resolve_structured_pane_command_inserts_default_subcommand_before_flags() {
         let mut config = config_with_agent("kiro");
         config.agents.insert(

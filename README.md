@@ -354,7 +354,7 @@ Each pane supports:
   flag)
 
 Built-in agents (`claude`, `gemini`, `agy`, `codex`, `opencode`, `kiro-cli`, `vibe`,
-`pi`, `omp`) are auto-detected when used as literal commands and receive prompt
+`pi`, `omp`, `muse`) are auto-detected when used as literal commands and receive prompt
 injection automatically, without needing the `<agent>` placeholder or a matching
 `agent` config:
 
@@ -785,7 +785,7 @@ done
 When you provide a prompt via `--prompt`, `--prompt-file`, or `--prompt-editor`,
 workmux automatically injects the prompt into panes running the configured agent
 command (e.g., `claude`, `codex`, `opencode`, `gemini`, `agy`, `kiro-cli`, `vibe`,
-`pi`, `omp`, or whatever you've set via the `agent` config or `--agent` flag) without
+`pi`, `omp`, `muse`, or whatever you've set via the `agent` config or `--agent` flag) without
 requiring any `.workmux.yaml` changes:
 
 - Panes with a command matching the configured agent are automatically started
@@ -810,7 +810,7 @@ LLM. The tool used depends on your configuration:
 
 1. `auto_name.command` is set: uses that command as-is
 2. `config.agent` is a known agent (`claude`, `gemini`, `agy`, `codex`, `opencode`,
-   `kiro-cli`, `vibe`, `pi`, `omp`): uses the agent's CLI with a fast/cheap model
+   `kiro-cli`, `vibe`, `pi`, `omp`, `muse`): uses the agent's CLI with a fast/cheap model
 3. Neither: falls back to the [`llm`](https://llm.datasette.io/) CLI tool
 
 ##### Usage
@@ -862,6 +862,7 @@ When an agent is configured, these commands are used automatically:
 | `kiro-cli` | `kiro-cli chat --no-interactive`                                         |
 | `pi`       | `pi -p`                                                                  |
 | `omp`      | `omp -p`                                                                 |
+| `muse`     | `sh -c 'muse exec "$(cat)"'`                                             |
 
 To override back to `llm` when an agent is configured, set
 `auto_name.command: "llm"`.
@@ -2035,19 +2036,21 @@ at-a-glance visibility into what the agent in each window doing.
 | Antigravity CLI (`agy`) | ✅ Supported\*                                                   |
 | Kiro         | [Tracking issue](https://github.com/kirodotdev/Kiro/issues/5440)            |
 | Mistral Vibe | [Tracking issue](https://github.com/mistralai/mistral-vibe/discussions/334) |
+| Muse (`muse`) | ✅ Supported\*                                                             |
 
 **Notes:**
 
 - **Copilot CLI**: No 💬 waiting state
 - **Pi**: No 💬 waiting state
 - **Antigravity CLI (`agy`)**: No 💬 waiting state
+- **Muse (`muse`)**: No 💬 waiting state
 - **Kiro**: Hooks support is messy: requires a custom agent since the default
   can't be edited
 
 ### Setup
 
 Run `workmux setup` to automatically detect Claude Code, Antigravity CLI,
-Copilot CLI, OpenCode, Pi, Oh My Pi, and other supported agent CLIs, install
+Copilot CLI, OpenCode, Pi, Oh My Pi, Muse, and other supported agent CLIs, install
 status tracking hooks, and install skills:
 
 ```bash
@@ -2056,7 +2059,8 @@ workmux setup
 
 You can also run specific parts: `workmux setup --hooks` or
 `workmux setup --skills`. For Claude Code, `CLAUDE_CONFIG_DIR` is respected for
-both hook and skill installation.
+both hook and skill installation. For Muse, `XDG_CONFIG_HOME` is respected when
+locating the config directory.
 
 Workmux will also prompt you on first run if it detects an agent without status
 tracking or skills configured.
@@ -2094,6 +2098,12 @@ to limitations in the Copilot CLI hooks implementation.
 **Antigravity CLI (`agy`)**: `workmux setup` installs lifecycle hooks in
 `~/.gemini/config/hooks.json`. `PreInvocation` marks the pane working, and the
 terminal `Stop` event marks it done.
+
+**Muse (`muse`)**: `workmux setup` merges status hooks into your muse
+`settings.json` (`$XDG_CONFIG_HOME/muse/settings.json`, else
+`~/.config/muse/settings.json`). `UserPromptSubmit` and `PreToolUse` mark the
+pane working, and the terminal `Stop` event marks it done. The waiting state is
+not supported because muse has no `Notification` hook event.
 
 **OpenCode**: download the workmux status plugin:
 

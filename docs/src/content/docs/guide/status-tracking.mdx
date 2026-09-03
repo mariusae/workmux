@@ -34,12 +34,14 @@ doing.
 | Antigravity CLI (`agy`) | ✅ Supported\*                                                              |
 | Kiro                    | [Tracking issue](https://github.com/kirodotdev/Kiro/issues/5440)            |
 | Mistral Vibe            | [Tracking issue](https://github.com/mistralai/mistral-vibe/discussions/334) |
+| Muse (`muse`)           | ✅ Supported\*                                                              |
 
 **Notes:**
 
 - **Copilot CLI**: No 💬 waiting state
 - **Pi**: No 💬 waiting state
 - **Antigravity CLI (`agy`)**: No 💬 waiting state
+- **Muse (`muse`)**: No 💬 waiting state
 - **Kiro**: Hooks support is messy: requires a custom agent since the default can't be edited
 
 ## Status icons
@@ -56,7 +58,7 @@ Run `workmux setup` to automatically detect your agent CLIs and install status t
 workmux setup
 ```
 
-This detects Claude Code, Antigravity CLI, Copilot CLI, OpenCode, Pi, and Oh My Pi by checking for their executable or configuration directories, then offers to install the appropriate hooks. For Claude Code, `CLAUDE_CONFIG_DIR` is respected when locating `settings.json`. Workmux will also prompt you on first run if it detects an agent without status tracking configured.
+This detects Claude Code, Antigravity CLI, Copilot CLI, OpenCode, Pi, Oh My Pi, and Muse by checking for their executable or configuration directories, then offers to install the appropriate hooks. For Claude Code, `CLAUDE_CONFIG_DIR` is respected when locating `settings.json`; for Muse, `XDG_CONFIG_HOME` is respected when locating the `muse` config directory. Workmux will also prompt you on first run if it detects an agent without status tracking configured.
 
 Workmux automatically modifies your tmux `window-status-format` to display the status icons. This happens once per session and only affects the current tmux session (not your global config).
 
@@ -180,6 +182,49 @@ For manual setup, merge this named hook group into `~/.gemini/config/hooks.json`
       {
         "type": "command",
         "command": "workmux set-window-status done >/dev/null 2>&1 || true; printf '{}\\n'"
+      }
+    ]
+  }
+}
+```
+
+## Muse (`muse`) setup
+
+`workmux setup` merges status hooks into your muse `settings.json` (`$XDG_CONFIG_HOME/muse/settings.json`, else `~/.config/muse/settings.json`). `UserPromptSubmit` and `PreToolUse` mark the pane working, and the terminal `Stop` event marks it done. Muse has no `Notification` event, so permission prompts are not tracked as a waiting state.
+
+For manual setup, merge these hook groups into the `hooks` object in your muse `settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "workmux set-window-status working"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "workmux set-window-status working"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "workmux set-window-status done"
+          }
+        ]
       }
     ]
   }

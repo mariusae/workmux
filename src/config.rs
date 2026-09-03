@@ -1891,6 +1891,9 @@ impl SandboxConfig {
                 "claude" => Some(home.join(".claude")),
                 "copilot" => Some(home.join(".copilot")),
                 "gemini" => Some(home.join(".gemini")),
+                "muse" => Some(crate::agent_setup::muse::muse_config_dir_with_env(
+                    &home, get_env,
+                )),
                 "agy" => Some(home.join(".gemini/antigravity-cli")),
                 "codex" => Some(home.join(".codex")),
                 "opencode" => Some(home.join(".local/share/opencode")),
@@ -4346,6 +4349,10 @@ extra_mounts:
             .resolved_agent_config_dir_with_env("omp", |_| None)
             .unwrap();
         assert_eq!(dir, home.join(".omp/agent"));
+        let dir = config
+            .resolved_agent_config_dir_with_env("muse", |_| None)
+            .unwrap();
+        assert_eq!(dir, home.join(".config/muse"));
     }
 
     #[test]
